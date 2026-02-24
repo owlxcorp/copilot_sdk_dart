@@ -1,0 +1,28 @@
+# Dart / pub
+.dart_tool/
+.packages
+build/
+doc/api/
+
+# Test coverage output
+coverage/
+
+# pubspec.lock is committed for reproducibility in this SDK package.
+# Uncomment the line below to ignore it (recommended for libraries):
+# pubspec.lock
+
+# Environment variables
+.env
+.env.*
+
+# macOS (matches github/copilot-sdk root .gitignore)
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Documentation validation output (matches github/copilot-sdk root .gitignore)
+docs/.validation/
