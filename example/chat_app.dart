@@ -55,16 +55,16 @@ Future<void> main(List<String> args) async {
 
     session.on((event) {
       switch (event) {
-        case AssistantThinkingEvent(:final content):
+        case AssistantReasoningEvent(:final content):
           if (content.trim().isNotEmpty) {
             stdout.writeln('[reasoning] $content');
           }
         case ToolExecutionStartEvent(:final toolName):
           stdout.writeln('[tool:start] $toolName');
-        case ToolExecutionCompleteEvent(:final toolName):
-          stdout.writeln('[tool:done] $toolName');
-        case SessionErrorEvent(:final error):
-          stderr.writeln('[session:error] $error');
+        case ToolExecutionCompleteEvent(:final toolCallId):
+          stdout.writeln('[tool:done] $toolCallId');
+        case SessionErrorEvent(:final message):
+          stderr.writeln('[session:error] $message');
         default:
           break;
       }

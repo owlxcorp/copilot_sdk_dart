@@ -81,8 +81,8 @@ Future<void> main() async {
     switch (event) {
       case ToolExecutionStartEvent(:final toolName):
         print('🔧 Calling tool: $toolName');
-      case ToolExecutionCompleteEvent(:final toolName, :final result):
-        print('✅ Tool $toolName returned: $result');
+      case ToolExecutionCompleteEvent(:final toolCallId, :final result):
+        print('✅ Tool call $toolCallId returned: $result');
       case AssistantMessageEvent(:final content):
         stdout.write(content);
       case SessionIdleEvent():

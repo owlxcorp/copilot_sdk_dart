@@ -351,6 +351,7 @@ void main() {
         'type': 'assistant.message',
         'id': 'evt-1',
         'timestamp': '2025-01-01T00:00:00Z',
+        'messageId': 'msg-evt-1',
         'content': 'Hello!',
       });
 
@@ -376,6 +377,7 @@ void main() {
           'type': 'assistant.message',
           'id': 'evt-wrapped-1',
           'timestamp': '2025-01-01T00:00:00Z',
+          'messageId': 'msg-wrapped-1',
           'content': 'Wrapped hello!',
         },
       });
@@ -385,6 +387,52 @@ void main() {
       expect(events, hasLength(1));
       expect(events[0], isA<AssistantMessageEvent>());
       expect((events[0] as AssistantMessageEvent).content, 'Wrapped hello!');
+    });
+
+    test('routes wrapped events using nested event.sessionId fallback',
+        () async {
+      final session = await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+
+      final events = <SessionEvent>[];
+      session.on(events.add);
+
+      await server.sendSessionEvent({
+        'event': {
+          'sessionId': session.sessionId,
+          'type': 'assistant.message',
+          'id': 'evt-wrapped-2',
+          'timestamp': '2025-01-01T00:00:00Z',
+          'messageId': 'msg-1',
+          'content': 'Nested sessionId hello!',
+        },
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(events, hasLength(1));
+      expect(events[0], isA<AssistantMessageEvent>());
+      expect((events[0] as AssistantMessageEvent).content,
+          'Nested sessionId hello!');
+    });
+
+    test('reports error when session.event is missing sessionId', () async {
+      final errors = <Object>[];
+      client.onError = errors.add;
+
+      await server.sendSessionEvent({
+        'type': 'assistant.message',
+        'id': 'evt-missing-session-id',
+        'timestamp': '2025-01-01T00:00:00Z',
+        'messageId': 'msg-1',
+        'content': 'No session id',
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(errors, hasLength(1));
+      expect(errors.single, isA<StateError>());
     });
 
     test('does not dispatch events to wrong session', () async {
@@ -404,6 +452,7 @@ void main() {
         'type': 'assistant.message',
         'id': 'evt-1',
         'timestamp': '2025-01-01T00:00:00Z',
+        'messageId': 'msg-fake-2',
         'content': 'Hello!',
       });
 
@@ -641,6 +690,7 @@ void main() {
         'type': 'assistant.message',
         'id': 'e2',
         'timestamp': '2025-01-01T00:00:00Z',
+        'messageId': 'msg-e2',
         'content': 'Hello',
       });
 

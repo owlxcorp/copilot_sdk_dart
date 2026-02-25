@@ -231,25 +231,15 @@ class CopilotSession {
       switch (event) {
         case AssistantMessageEvent(:final content):
           buffer.write(content);
-        case UnknownEvent(:final type, :final data)
-            when type == 'assistant.message_delta':
-          final delta = _readUnknownEventText(data);
-          if (delta != null) {
-            buffer.write(delta);
-          }
-        case UnknownEvent(:final type, :final data)
-            when type == 'assistant.message':
-          final content = _readUnknownEventText(data);
-          if (content != null) {
-            buffer.write(content);
-          }
+        case AssistantMessageDeltaEvent(:final deltaContent):
+          buffer.write(deltaContent);
         case SessionIdleEvent():
           idleReceived = true;
           completeIfReady();
-        case SessionErrorEvent(:final error):
+        case SessionErrorEvent(:final message):
           if (!completer.isCompleted) {
             completer.completeError(
-              StateError('Session error: $error'),
+              StateError('Session error: $message'),
             );
           }
         default:
@@ -274,25 +264,6 @@ class CopilotSession {
     } finally {
       unsub();
     }
-  }
-
-  String? _readUnknownEventText(Map<String, dynamic> eventData) {
-    final nested = eventData['data'];
-    if (nested is Map) {
-      final payload = nested.cast<Object?, Object?>();
-      final delta = payload['deltaContent'];
-      if (delta is String && delta.isNotEmpty) return delta;
-
-      final content = payload['content'];
-      if (content is String && content.isNotEmpty) return content;
-    }
-
-    final directContent = eventData['content'];
-    if (directContent is String && directContent.isNotEmpty) {
-      return directContent;
-    }
-
-    return null;
   }
 
   // ── Session RPC Methods ────────────────────────────────────────────────

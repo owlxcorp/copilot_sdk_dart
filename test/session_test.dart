@@ -120,11 +120,35 @@ class _TestSession {
 }
 
 SessionEvent _makeEvent(String type, {Map<String, dynamic> extra = const {}}) {
+  final payload = <String, dynamic>{...extra};
+  if (type == 'session.start') {
+    payload.putIfAbsent('sessionId', () => 'test-session-1');
+    payload.putIfAbsent('version', () => 2);
+    payload.putIfAbsent('producer', () => 'copilot-cli');
+    payload.putIfAbsent('copilotVersion', () => '1.0.0');
+    payload.putIfAbsent('startTime', () => '2025-01-01T00:00:00Z');
+  } else if (type == 'session.resume') {
+    payload.putIfAbsent('resumeTime', () => '2025-01-01T00:00:00Z');
+    payload.putIfAbsent('eventCount', () => 1);
+  } else if (type == 'session.error') {
+    payload.putIfAbsent('errorType', () => 'test_error');
+    payload.putIfAbsent('message', () => '');
+  } else if (type == 'assistant.message') {
+    payload.putIfAbsent('messageId', () => 'msg-1');
+    payload.putIfAbsent('content', () => '');
+  } else if (type == 'assistant.message_delta') {
+    payload.putIfAbsent('messageId', () => 'msg-1');
+    payload.putIfAbsent('deltaContent', () => '');
+  } else if (type == 'tool.execution_complete') {
+    payload.putIfAbsent('toolCallId', () => 'tc-1');
+    payload.putIfAbsent('success', () => true);
+  }
+
   return SessionEvent.fromJson({
     'type': type,
     'id': 'evt-${DateTime.now().microsecondsSinceEpoch}',
     'timestamp': '2025-01-01T00:00:00Z',
-    ...extra,
+    ...payload,
   });
 }
 
@@ -241,7 +265,7 @@ void main() {
         _makeEvent('assistant.message', extra: {'content': 'hi'}),
       );
       ts.session
-          .handleEvent(_makeEvent('session.error', extra: {'error': 'x'}));
+          .handleEvent(_makeEvent('session.error', extra: {'message': 'x'}));
       ts.session.handleEvent(
         _makeEvent('assistant.message', extra: {'content': 'there'}),
       );
@@ -603,12 +627,14 @@ void main() {
             'type': 'assistant.message',
             'id': 'e1',
             'timestamp': '2025-01-01T00:00:00Z',
+            'messageId': 'assistant-msg-1',
             'content': 'Hello ',
           }));
           ts.session.handleEvent(SessionEvent.fromJson({
             'type': 'assistant.message',
             'id': 'e2',
             'timestamp': '2025-01-01T00:00:01Z',
+            'messageId': 'assistant-msg-2',
             'content': 'World!',
           }));
           ts.session.handleEvent(SessionEvent.fromJson({
@@ -650,7 +676,8 @@ void main() {
             'type': 'session.error',
             'id': 'e1',
             'timestamp': '2025-01-01T00:00:00Z',
-            'error': 'rate limit exceeded',
+            'errorType': 'provider_error',
+            'message': 'rate limit exceeded',
           }));
         });
         return {'messageId': 'msg-err'};
@@ -674,6 +701,7 @@ void main() {
           'type': 'assistant.message',
           'id': 'e1',
           'timestamp': '2025-01-01T00:00:00Z',
+          'messageId': 'assistant-msg-fast',
           'content': 'Fast reply',
         }));
         ts.session.handleEvent(SessionEvent.fromJson({

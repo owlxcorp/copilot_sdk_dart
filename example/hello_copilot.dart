@@ -49,8 +49,8 @@ Future<void> main() async {
         stdout.write(content);
       case SessionIdleEvent():
         print('\n--- Turn complete ---');
-      case SessionErrorEvent(:final error):
-        stderr.writeln('Error: $error');
+      case SessionErrorEvent(:final message):
+        stderr.writeln('Error: $message');
       default:
         break;
     }

@@ -35,29 +35,30 @@ Future<void> main() async {
     switch (event) {
       case SessionStartEvent(:final sessionId):
         print('[$ts] 🟢 Session started: $sessionId');
-      case AssistantThinkingEvent(:final content):
+      case AssistantReasoningEvent(:final content):
         print(
             '[$ts] 🤔 Thinking: ${content.substring(0, content.length.clamp(0, 80))}...');
       case AssistantMessageEvent(:final content):
         stdout.write(content);
-      case ToolCallEvent(:final toolName, :final toolCallId):
-        print('[$ts] 🔧 Tool call: $toolName ($toolCallId)');
+      case ToolUserRequestedEvent(:final toolName, :final toolCallId):
+        print('[$ts] 🔧 Tool call requested: $toolName ($toolCallId)');
       case ToolExecutionStartEvent(:final toolName):
         print('[$ts] ⏳ Executing: $toolName');
-      case ToolExecutionCompleteEvent(:final toolName):
-        print('[$ts] ✅ Complete: $toolName');
+      case ToolExecutionCompleteEvent(:final toolCallId, :final success):
+        print('[$ts] ✅ Complete: $toolCallId (success: $success)');
       case SessionTitleChangedEvent(:final title):
         print('[$ts] 📝 Title: $title');
-      case SessionModelChangeEvent(:final modelId):
-        print('[$ts] 🔄 Model: $modelId');
-      case SessionModeChangedEvent(:final mode):
-        print('[$ts] 🎯 Mode: $mode');
-      case SessionErrorEvent(:final error, :final code):
-        print('[$ts] ❌ Error ($code): $error');
+      case SessionModelChangeEvent(:final newModel):
+        print('[$ts] 🔄 Model: $newModel');
+      case SessionModeChangedEvent(:final previousMode, :final newMode):
+        print('[$ts] 🎯 Mode: $previousMode -> $newMode');
+      case SessionErrorEvent(:final message, :final statusCode):
+        print('[$ts] ❌ Error (${statusCode ?? 'n/a'}): $message');
       case SessionIdleEvent():
         print('\n[$ts] 💤 Idle');
-      case SessionShutdownEvent(:final reason):
-        print('[$ts] 🔴 Shutdown: $reason');
+      case SessionShutdownEvent(:final shutdownType, :final errorReason):
+        print(
+            '[$ts] 🔴 Shutdown: $shutdownType (${errorReason ?? 'no error'})');
       default:
         print('[$ts] ℹ️ ${event.type}');
     }

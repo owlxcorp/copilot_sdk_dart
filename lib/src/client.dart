@@ -354,17 +354,25 @@ class CopilotClient {
       onError?.call(error);
       return;
     }
-    final sessionId = params['sessionId'] as String?;
-
+    final sessionId =
+        (params['sessionId'] ?? eventJson['sessionId']) as String?;
     if (sessionId != null && _sessions.containsKey(sessionId)) {
       _sessions[sessionId]!.handleEvent(event);
+      return;
     }
 
-    // Also check parent-level session events
+    // `session.start` carries sessionId in event data, so route by embedded ID.
     if (event is SessionStartEvent) {
       _sessions[event.sessionId]?.handleEvent(event);
-    } else if (event is SessionResumeEvent) {
-      _sessions[event.sessionId]?.handleEvent(event);
+      return;
+    }
+
+    // Surface malformed notifications instead of silently dropping them.
+    if (sessionId == null) {
+      onError?.call(
+        StateError(
+            'session.event missing sessionId for event type: ${event.type}'),
+      );
     }
   }
 
