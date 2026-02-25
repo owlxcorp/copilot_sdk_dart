@@ -56,12 +56,11 @@ void main() {
       expect(json['path'], '/path/to/file.txt');
     });
 
-    test('image attachment', () {
-      final a = Attachment.image(data: 'base64data', mimeType: 'image/png');
+    test('directory attachment', () {
+      const a = DirectoryAttachment('/path/to/dir');
       final json = a.toJson();
-      expect(json['type'], 'image');
-      expect(json['data'], 'base64data');
-      expect(json['mimeType'], 'image/png');
+      expect(json['type'], 'directory');
+      expect(json['path'], '/path/to/dir');
     });
   });
 

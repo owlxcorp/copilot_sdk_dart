@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'transport/json_rpc_connection.dart';
+import 'types/auth_types.dart';
+import 'types/hooks.dart';
 import 'types/session_config.dart';
 import 'types/session_event.dart';
 import 'types/tool_types.dart';
@@ -37,6 +39,7 @@ class CopilotSession {
     required this.sessionId,
     required JsonRpcConnection connection,
     required this.config,
+    this.workspacePath,
   }) : _connection = connection;
 
   /// The unique session ID.
@@ -44,6 +47,9 @@ class CopilotSession {
 
   /// Session configuration.
   final SessionConfig config;
+
+  /// Workspace path returned from the CLI (if set).
+  final String? workspacePath;
 
   final JsonRpcConnection _connection;
 
@@ -53,6 +59,11 @@ class CopilotSession {
 
   // Tool registry (session-local)
   final Map<String, Tool> _tools = {};
+
+  // Dynamic handler overrides (take precedence over config handlers)
+  PermissionHandler? _permissionHandler;
+  UserInputHandler? _userInputHandler;
+  SessionHooks? _hooksOverride;
 
   // Event stream
   StreamController<SessionEvent>? _eventStreamController;
@@ -105,17 +116,29 @@ class CopilotSession {
     if (_destroyed) return;
 
     // Notify event stream
-    _eventStreamController?.add(event);
+    try {
+      _eventStreamController?.add(event);
+    } catch (_) {
+      // Stream controller may be closed if session is being torn down.
+    }
 
     // Notify persistent handlers
     for (final handler in List.of(_eventHandlers)) {
-      handler(event);
+      try {
+        handler(event);
+      } catch (_) {
+        // Individual handler errors must not prevent other handlers.
+      }
     }
 
     // Notify one-shot handlers
     final toRemove = <_OnceHandler>[];
     for (final once in List.of(_onceHandlers)) {
-      once.handler(event);
+      try {
+        once.handler(event);
+      } catch (_) {
+        // Individual handler errors must not prevent other handlers.
+      }
       toRemove.add(once);
     }
     _onceHandlers.removeWhere(toRemove.contains);
@@ -172,11 +195,47 @@ class CopilotSession {
 
   // ── Messaging ──────────────────────────────────────────────────────────
 
+  // ── Dynamic Handler Registration ──────────────────────────────────────
+
+  /// Dynamically registers a permission handler on this session.
+  ///
+  /// Takes precedence over [SessionConfig.onPermissionRequest].
+  void registerPermissionHandler(PermissionHandler handler) {
+    _permissionHandler = handler;
+  }
+
+  /// Dynamically registers a user input handler on this session.
+  ///
+  /// Takes precedence over [SessionConfig.onUserInputRequest].
+  void registerUserInputHandler(UserInputHandler handler) {
+    _userInputHandler = handler;
+  }
+
+  /// Dynamically registers hooks on this session.
+  ///
+  /// Takes precedence over [SessionConfig.hooks].
+  void registerHooks(SessionHooks hooks) {
+    _hooksOverride = hooks;
+  }
+
+  /// The effective permission handler (dynamic override > config).
+  PermissionHandler get effectivePermissionHandler =>
+      _permissionHandler ?? config.onPermissionRequest;
+
+  /// The effective user input handler (dynamic override > config).
+  UserInputHandler? get effectiveUserInputHandler =>
+      _userInputHandler ?? config.onUserInputRequest;
+
+  /// The effective hooks (dynamic override > config).
+  SessionHooks? get effectiveHooks => _hooksOverride ?? config.hooks;
+
+  // ── Send Methods ──────────────────────────────────────────────────────
+
   /// Sends a message to the session. Returns the message ID.
   Future<String> send(
     String prompt, {
     List<Attachment> attachments = const [],
-    AgentMode? mode,
+    MessageDeliveryMode? mode,
   }) async {
     _ensureAlive();
 
@@ -197,13 +256,24 @@ class CopilotSession {
     return result['messageId'] as String;
   }
 
+  /// Sends a message using a [MessageOptions] object.
+  ///
+  /// This matches the upstream SDK's `send(options: MessageOptions)` API.
+  Future<String> sendMessage(MessageOptions options) {
+    return send(
+      options.prompt,
+      attachments: options.attachments,
+      mode: options.mode,
+    );
+  }
+
   /// Sends a message and waits for the assistant's complete reply.
   ///
   /// Returns the concatenated assistant message content, or null on timeout.
   Future<AssistantReply?> sendAndWait(
     String prompt, {
     List<Attachment> attachments = const [],
-    AgentMode? mode,
+    MessageDeliveryMode? mode,
     Duration timeout = const Duration(minutes: 5),
   }) async {
     _ensureAlive();
@@ -454,6 +524,78 @@ class CopilotSession {
       },
       const Duration(seconds: 30),
     );
+  }
+
+  // ── Agent RPC ─────────────────────────────────────────────────────────
+
+  /// Lists available agents for this session.
+  Future<List<AgentInfo>> listAgents() async {
+    _ensureAlive();
+    final result = await _connection.sendRequest(
+      'session.agent.list',
+      {'sessionId': sessionId},
+      const Duration(seconds: 10),
+    ) as Map<String, dynamic>;
+    final agents = result['agents'] as List<dynamic>;
+    return agents
+        .map((a) => AgentInfo.fromJson(a as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Gets the currently active agent.
+  Future<AgentInfo?> getCurrentAgent() async {
+    _ensureAlive();
+    final result = await _connection.sendRequest(
+      'session.agent.getCurrent',
+      {'sessionId': sessionId},
+      const Duration(seconds: 5),
+    ) as Map<String, dynamic>;
+    final agent = result['agent'];
+    if (agent == null) return null;
+    return AgentInfo.fromJson(agent as Map<String, dynamic>);
+  }
+
+  /// Selects an agent by name.
+  Future<AgentInfo> selectAgent(String name) async {
+    _ensureAlive();
+    final result = await _connection.sendRequest(
+      'session.agent.select',
+      {'sessionId': sessionId, 'name': name},
+      const Duration(seconds: 10),
+    ) as Map<String, dynamic>;
+    return AgentInfo.fromJson(result['agent'] as Map<String, dynamic>);
+  }
+
+  /// Deselects the current agent.
+  Future<void> deselectAgent() async {
+    _ensureAlive();
+    await _connection.sendRequest(
+      'session.agent.deselect',
+      {'sessionId': sessionId},
+      const Duration(seconds: 5),
+    );
+  }
+
+  // ── Compaction RPC ────────────────────────────────────────────────────
+
+  /// Compacts the session history.
+  Future<CompactionResult> compact() async {
+    _ensureAlive();
+    final result = await _connection.sendRequest(
+      'session.compaction.compact',
+      {'sessionId': sessionId},
+      const Duration(seconds: 30),
+    ) as Map<String, dynamic>;
+    return CompactionResult.fromJson(result);
+  }
+
+  // ── Tool Registration ─────────────────────────────────────────────────
+
+  /// Registers multiple tools at once.
+  void registerTools(List<Tool> tools) {
+    for (final tool in tools) {
+      _tools[tool.name] = tool;
+    }
   }
 
   // ── Internal ───────────────────────────────────────────────────────────

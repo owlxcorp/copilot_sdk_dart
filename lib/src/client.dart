@@ -3,6 +3,7 @@ import 'dart:async';
 import 'session.dart';
 import 'transport/json_rpc_connection.dart';
 import 'transport/json_rpc_transport.dart';
+import 'transport/stdio_transport.dart';
 import 'types/auth_types.dart';
 import 'types/client_options.dart';
 import 'types/connection_state.dart';
@@ -15,10 +16,15 @@ const int sdkProtocolVersion = 2;
 
 /// Client for communicating with the Copilot CLI server.
 ///
+/// When no [transport] is provided, the client automatically creates a
+/// [StdioTransport] using [CopilotClientOptions.cliPath] and appends the
+/// required `--headless --stdio --no-auto-update` flags. Additional CLI
+/// arguments (e.g. `--model`) can be passed via [CopilotClientOptions.cliArgs].
+///
 /// ```dart
+/// // Minimal — spawns CLI automatically
 /// final client = CopilotClient(
 ///   options: CopilotClientOptions(cliPath: '/usr/local/bin/copilot'),
-///   transport: StdioTransport(executable: 'copilot', arguments: ['--headless']),
 /// );
 /// await client.start();
 ///
@@ -30,13 +36,22 @@ const int sdkProtocolVersion = 2;
 /// );
 /// ```
 class CopilotClient {
+  /// Creates a new client.
+  ///
+  /// If [transport] is omitted, a [StdioTransport] is created automatically
+  /// from [options] with `--headless --stdio --no-auto-update` appended.
+  /// Use [CopilotClientOptions.cliArgs] for additional flags like `--model`.
+  ///
+  /// If [transport] is provided, it is used as-is and the caller is
+  /// responsible for configuring it with the correct CLI arguments.
   CopilotClient({
-    required this.options,
-    required JsonRpcTransport transport,
-  }) : _transport = transport;
+    CopilotClientOptions options = const CopilotClientOptions(),
+    JsonRpcTransport? transport,
+  })  : options = options,
+        _transport = transport;
 
   final CopilotClientOptions options;
-  final JsonRpcTransport _transport;
+  JsonRpcTransport? _transport;
 
   JsonRpcConnection? _connection;
   ConnectionState _connectionState = ConnectionState.disconnected;
@@ -45,6 +60,11 @@ class CopilotClient {
   // Callbacks
   void Function(ConnectionState state)? onConnectionStateChanged;
   void Function(Object error)? onError;
+
+  // Lifecycle event handlers
+  final List<void Function(SessionLifecycleEvent)> _lifecycleHandlers = [];
+  final Map<SessionLifecycleEventType,
+      List<void Function(SessionLifecycleEvent)>> _typedLifecycleHandlers = {};
 
   /// Current connection state.
   ConnectionState get connectionState => _connectionState;
@@ -68,7 +88,7 @@ class CopilotClient {
       await _startTransport();
 
       // Create JSON-RPC connection over transport
-      _connection = JsonRpcConnection(_transport);
+      _connection = JsonRpcConnection(_transport!, log: options.log);
       _connection!.onClose = _handleConnectionClose;
 
       // Register server→client handlers
@@ -100,7 +120,21 @@ class CopilotClient {
     // Close connection and transport
     await _connection?.close();
     _connection = null;
-    await _transport.close();
+    await _transport?.close();
+
+    _setConnectionState(ConnectionState.disconnected);
+  }
+
+  /// Force-stops the client immediately without graceful session cleanup.
+  ///
+  /// Unlike [stop], this does not attempt to destroy sessions via RPC.
+  /// It clears sessions, kills the connection, and closes the transport.
+  Future<void> forceStop() async {
+    _sessions.clear();
+
+    await _connection?.close();
+    _connection = null;
+    await _transport?.close();
 
     _setConnectionState(ConnectionState.disconnected);
   }
@@ -111,7 +145,7 @@ class CopilotClient {
   Future<CopilotSession> createSession({
     required SessionConfig config,
   }) async {
-    _ensureConnected();
+    await _autoStartIfNeeded();
 
     final result = await _connection!.sendRequest(
       'session.create',
@@ -121,10 +155,12 @@ class CopilotClient {
 
     final resultMap = result as Map<String, dynamic>;
     final sessionId = resultMap['sessionId'] as String;
+    final workspacePath = resultMap['workspacePath'] as String?;
     final session = CopilotSession(
       sessionId: sessionId,
       connection: _connection!,
       config: config,
+      workspacePath: workspacePath,
     );
 
     _sessions[sessionId] = session;
@@ -137,25 +173,33 @@ class CopilotClient {
   Future<CopilotSession> resumeSession({
     required ResumeSessionConfig config,
   }) async {
-    _ensureConnected();
+    await _autoStartIfNeeded();
 
     final result = await _connection!.sendRequest(
       'session.resume',
-      {'sessionId': config.sessionId},
+      config.toJson(),
       const Duration(seconds: 30),
     );
 
     final resultMap = result as Map<String, dynamic>;
     final sessionId = resultMap['sessionId'] as String;
+    final workspacePath = resultMap['workspacePath'] as String?;
     final session = CopilotSession(
       sessionId: sessionId,
       connection: _connection!,
       config: SessionConfig(
         tools: config.tools,
         hooks: config.hooks,
+        model: config.model,
+        systemMessage: config.systemMessage,
+        provider: config.provider,
+        reasoningEffort: config.reasoningEffort,
+        mcpServers: config.mcpServers,
+        customAgents: config.customAgents,
         onPermissionRequest: config.onPermissionRequest,
         onUserInputRequest: config.onUserInputRequest,
       ),
+      workspacePath: workspacePath,
     );
 
     _sessions[sessionId] = session;
@@ -272,22 +316,120 @@ class CopilotClient {
     return AccountQuota.fromJson(result as Map<String, dynamic>);
   }
 
+  /// Gets the last session ID.
+  Future<String?> getLastSessionId() async {
+    _ensureConnected();
+    final result = await _connection!.sendRequest(
+      'session.getLastId',
+      <String, dynamic>{},
+      const Duration(seconds: 5),
+    ) as Map<String, dynamic>;
+    return result['sessionId'] as String?;
+  }
+
+  /// Gets the foreground session ID and workspace path.
+  Future<ForegroundSessionInfo> getForegroundSessionId() async {
+    _ensureConnected();
+    final result = await _connection!.sendRequest(
+      'session.getForeground',
+      <String, dynamic>{},
+      const Duration(seconds: 5),
+    ) as Map<String, dynamic>;
+    return ForegroundSessionInfo.fromJson(result);
+  }
+
+  /// Sets the foreground session.
+  Future<void> setForegroundSessionId(String sessionId) async {
+    _ensureConnected();
+    await _connection!.sendRequest(
+      'session.setForeground',
+      {'sessionId': sessionId},
+      const Duration(seconds: 5),
+    );
+  }
+
+  // ── Lifecycle Event Subscription ─────────────────────────────────────
+
+  /// Subscribe to all session lifecycle events. Returns an unsubscribe fn.
+  void Function() onLifecycleEvent(
+    void Function(SessionLifecycleEvent event) handler, [
+    SessionLifecycleEventType? type,
+  ]) {
+    if (type != null) {
+      final list = _typedLifecycleHandlers.putIfAbsent(type, () => []);
+      list.add(handler);
+      return () => list.remove(handler);
+    }
+    _lifecycleHandlers.add(handler);
+    return () => _lifecycleHandlers.remove(handler);
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────
 
   Future<void> _startTransport() async {
-    // Check transport type and call appropriate start/connect method.
-    // The transport interface is abstract, so we use duck-typing.
-    final transport = _transport;
-    if (!transport.isOpen) {
-      // Try to start/connect the transport. The concrete type
-      // should expose start() or connect().
-      // For pre-opened transports (e.g., MockTransport), this is skipped.
+    // If a transport was injected and is already open, use it as-is.
+    if (_transport != null && _transport!.isOpen) return;
+
+    // If no transport was provided, build one from options.
+    if (_transport == null) {
+      _transport = _buildTransport();
+    }
+
+    // Start the transport (spawns the CLI process for StdioTransport).
+    final transport = _transport!;
+    if (transport is StdioTransport) {
+      await transport.start();
+    } else if (!transport.isOpen) {
       throw StateError(
-        'Transport is not open. Call start() or connect() '
-        'on the transport before creating the client, or use a transport '
-        'that auto-opens.',
+        'Transport is not open. Call start() on the transport before '
+        'creating the client, or omit transport to auto-create one.',
       );
     }
+  }
+
+  /// Builds a [StdioTransport] from [options], adding required CLI flags.
+  ///
+  /// The flags `--headless`, `--stdio`, `--no-auto-update` are always
+  /// appended (matching the upstream Node.js SDK behavior).
+  /// [CopilotClientOptions.cliArgs] are prepended for user-specified flags.
+  StdioTransport _buildTransport() {
+    final executable = options.cliPath ?? 'copilot';
+    final args = <String>[
+      ...options.cliArgs,
+      '--headless',
+      '--no-auto-update',
+    ];
+
+    if (options.useStdio) {
+      args.add('--stdio');
+    }
+
+    final logLevel = options.logLevel;
+    if (logLevel != null) {
+      args.addAll(['--log-level', logLevel.toJsonValue()]);
+    }
+
+    if (options.githubToken != null) {
+      args.add('--auth-token-env');
+      args.add('COPILOT_SDK_AUTH_TOKEN');
+    }
+
+    if (options.useLoggedInUser == false) {
+      args.add('--no-auto-login');
+    }
+
+    // Merge env — add auth token if provided
+    Map<String, String>? env = options.env;
+    if (options.githubToken != null) {
+      env = {...?env, 'COPILOT_SDK_AUTH_TOKEN': options.githubToken!};
+    }
+
+    return StdioTransport(
+      executable: executable,
+      arguments: args,
+      workingDirectory: options.cwd,
+      environment: env,
+    );
   }
 
   void _registerHandlers() {
@@ -300,8 +442,9 @@ class CopilotClient {
     );
 
     // Tool call requests (server → client)
+    // The CLI sends tool calls using the 'tool.call' method.
     conn.registerRequestHandler(
-      'toolCall.request',
+      'tool.call',
       (dynamic params) => _handleToolCallRequest(params),
     );
 
@@ -321,6 +464,12 @@ class CopilotClient {
     conn.registerRequestHandler(
       'hooks.invoke',
       (dynamic params) => _handleHookInvoke(params),
+    );
+
+    // Session lifecycle events (server → client)
+    conn.registerNotificationHandler(
+      'session.lifecycle',
+      (dynamic params) => _handleLifecycleEvent(params),
     );
   }
 
@@ -354,25 +503,31 @@ class CopilotClient {
       onError?.call(error);
       return;
     }
-    final sessionId =
-        (params['sessionId'] ?? eventJson['sessionId']) as String?;
-    if (sessionId != null && _sessions.containsKey(sessionId)) {
-      _sessions[sessionId]!.handleEvent(event);
-      return;
-    }
 
-    // `session.start` carries sessionId in event data, so route by embedded ID.
-    if (event is SessionStartEvent) {
-      _sessions[event.sessionId]?.handleEvent(event);
-      return;
-    }
+    try {
+      final sessionId =
+          (params['sessionId'] ?? eventJson['sessionId']) as String?;
+      if (sessionId != null && _sessions.containsKey(sessionId)) {
+        _sessions[sessionId]!.handleEvent(event);
+        return;
+      }
 
-    // Surface malformed notifications instead of silently dropping them.
-    if (sessionId == null) {
-      onError?.call(
-        StateError(
-            'session.event missing sessionId for event type: ${event.type}'),
-      );
+      // `session.start` carries sessionId in event data, so route by embedded ID.
+      if (event is SessionStartEvent) {
+        _sessions[event.sessionId]?.handleEvent(event);
+        return;
+      }
+
+      // Surface malformed notifications instead of silently dropping them.
+      if (sessionId == null) {
+        onError?.call(
+          StateError(
+              'session.event missing sessionId for event type: ${event.type}'),
+        );
+      }
+    } catch (error) {
+      // Session routing/dispatch errors must not kill the transport.
+      onError?.call(error);
     }
   }
 
@@ -386,6 +541,9 @@ class CopilotClient {
     final toolCallId = params['toolCallId'] as String?;
     final arguments = params['arguments'];
 
+    options.log?.call(
+        'SDK: tool.call → $toolName (session=$sessionId, callId=$toolCallId)');
+
     if (sessionId == null || toolName == null || toolCallId == null) {
       throw const JsonRpcError(
         code: -32602,
@@ -395,6 +553,8 @@ class CopilotClient {
 
     final session = _sessions[sessionId];
     if (session == null) {
+      options.log?.call(
+          'SDK: tool.call FAILED → session $sessionId not found, have: ${_sessions.keys.join(', ')}');
       throw JsonRpcError(
         code: -32600,
         message: 'Unknown session: $sessionId',
@@ -410,7 +570,10 @@ class CopilotClient {
 
     final result =
         await session.handleToolCall(toolName, arguments, invocation);
-    return result.toJson();
+    options.log?.call(
+        'SDK: tool.call DONE → $toolName result=${result is ToolResultSuccess ? 'success' : 'failure'}');
+    // CLI expects {"result": {toolResult}} envelope (matches Go SDK toolCallResponse)
+    return {'result': result.toJson()};
   }
 
   Future<Map<String, dynamic>> _handlePermissionRequest(
@@ -437,8 +600,9 @@ class CopilotClient {
     final invocation = PermissionInvocation(sessionId: sessionId);
 
     final result =
-        await session.config.onPermissionRequest(request, invocation);
-    return result.toJson();
+        await session.effectivePermissionHandler(request, invocation);
+    // CLI expects {"result": {permissionResult}} envelope (matches Go SDK permissionRequestResponse)
+    return {'result': result.toJson()};
   }
 
   Future<Map<String, dynamic>> _handleUserInputRequest(
@@ -461,7 +625,7 @@ class CopilotClient {
       );
     }
 
-    final handler = session.config.onUserInputRequest;
+    final handler = session.effectiveUserInputHandler;
     if (handler == null) {
       throw const JsonRpcError(
         code: -32601,
@@ -500,7 +664,7 @@ class CopilotClient {
       );
     }
 
-    final hooks = session.config.hooks;
+    final hooks = session.effectiveHooks;
     if (hooks == null) {
       return <String, dynamic>{};
     }
@@ -509,6 +673,28 @@ class CopilotClient {
     if (result == null) return <String, dynamic>{};
     if (result is Map<String, dynamic>) return result;
     return (result as dynamic).toJson() as Map<String, dynamic>;
+  }
+
+  void _handleLifecycleEvent(dynamic params) {
+    if (params == null || params is! Map<String, dynamic>) return;
+    try {
+      final event = SessionLifecycleEvent.fromJson(params);
+      for (final handler in List.of(_lifecycleHandlers)) {
+        try {
+          handler(event);
+        } catch (_) {}
+      }
+      final typed = _typedLifecycleHandlers[event.type];
+      if (typed != null) {
+        for (final handler in List.of(typed)) {
+          try {
+            handler(event);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      onError?.call(e);
+    }
   }
 
   void _handleConnectionClose() {
@@ -524,6 +710,17 @@ class CopilotClient {
     if (_connectionState == state) return;
     _connectionState = state;
     onConnectionStateChanged?.call(state);
+  }
+
+  /// Auto-starts the client if [CopilotClientOptions.autoStart] is enabled
+  /// and the client is not yet connected.
+  Future<void> _autoStartIfNeeded() async {
+    if (isConnected && _connection != null) return;
+    if (options.autoStart) {
+      await start();
+    } else {
+      _ensureConnected();
+    }
   }
 
   void _ensureConnected() {

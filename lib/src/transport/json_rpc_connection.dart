@@ -12,7 +12,7 @@ import 'json_rpc_transport.dart';
 /// - Receiving notifications (no ID) and dispatching to handlers
 /// - Request timeout management
 class JsonRpcConnection {
-  JsonRpcConnection(this._transport) {
+  JsonRpcConnection(this._transport, {this.log}) {
     _subscription = _transport.messages.listen(
       _handleMessage,
       onError: _handleError,
@@ -23,6 +23,9 @@ class JsonRpcConnection {
   final JsonRpcTransport _transport;
   final _uuid = const Uuid();
   StreamSubscription<Map<String, dynamic>>? _subscription;
+
+  /// Optional log callback for diagnostic messages.
+  final void Function(String message)? log;
 
   /// Pending outgoing requests awaiting a response, keyed by request ID.
   final Map<String, Completer<dynamic>> _pendingRequests = {};
@@ -172,12 +175,14 @@ class JsonRpcConnection {
       _handleResponse(message);
     } else if (hasMethod && hasId) {
       // This is a request from the remote side
+      log?.call('RPC: ← request ${message['method']} (id=${message['id']})');
       _handleIncomingRequest(message);
     } else if (hasMethod && !hasId) {
       // This is a notification
+      log?.call('RPC: ← notification ${message['method']}');
       _handleNotification(message);
     } else {
-      // Unknown message format — ignore silently
+      log?.call('RPC: ← unknown message format: ${message.keys.join(', ')}');
     }
   }
 
@@ -201,8 +206,11 @@ class JsonRpcConnection {
     final method = message['method'] as String;
     final params = message['params'];
 
+    log?.call('RPC: incoming request → $method (id=$id)');
+
     final handler = _requestHandlers[method];
     if (handler == null) {
+      log?.call('RPC: method not found → $method');
       // Method not found
       await _sendResponse(id, error: {
         'code': -32601,
@@ -213,8 +221,10 @@ class JsonRpcConnection {
 
     try {
       final result = await handler(params);
+      log?.call('RPC: request handled → $method (id=$id)');
       await _sendResponse(id, result: result);
     } catch (e) {
+      log?.call('RPC: request error → $method: $e');
       if (e is JsonRpcError) {
         await _sendResponse(id, error: {
           'code': e.code,
@@ -236,10 +246,19 @@ class JsonRpcConnection {
 
     final handler = _notificationHandlers[method];
     if (handler != null) {
-      handler(params);
+      try {
+        handler(params);
+      } catch (e) {
+        // Notification handler errors must not kill the transport stream.
+        onError?.call(e);
+      }
     }
 
-    onNotification?.call(method, params);
+    try {
+      onNotification?.call(method, params);
+    } catch (e) {
+      onError?.call(e);
+    }
   }
 
   Future<void> _sendResponse(
@@ -259,7 +278,13 @@ class JsonRpcConnection {
       response['result'] = result;
     }
 
-    await _transport.send(response);
+    try {
+      await _transport.send(response);
+    } catch (e) {
+      // Send failures must not crash the connection — the remote side
+      // will time out the request. Log via the error callback.
+      onError?.call(e);
+    }
   }
 
   void _handleError(Object error) {

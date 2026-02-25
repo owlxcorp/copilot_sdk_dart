@@ -1,12 +1,15 @@
 import 'dart:async';
 
+import 'package:copilot_sdk_dart/src/client.dart';
 import 'package:copilot_sdk_dart/src/session.dart';
 import 'package:copilot_sdk_dart/src/transport/json_rpc_connection.dart';
+import 'package:copilot_sdk_dart/src/types/client_options.dart';
 import 'package:copilot_sdk_dart/src/types/session_config.dart';
 import 'package:copilot_sdk_dart/src/types/session_event.dart';
 import 'package:copilot_sdk_dart/src/types/tool_types.dart';
 import 'package:test/test.dart';
 
+import 'helpers/fake_server.dart';
 import 'transport/mock_transport.dart';
 
 /// Creates a test session with a mock transport pair.
@@ -607,13 +610,29 @@ void main() {
 
     test('send includes mode in params', () async {
       await ts.session.send(
-        'Run in autopilot',
-        mode: AgentMode.autopilot,
+        'Send immediately',
+        mode: MessageDeliveryMode.immediate,
       );
 
       final sent = ts.pair.client.sentMessages.last;
       final params = sent['params'] as Map<String, dynamic>;
-      expect(params['mode'], 'autopilot');
+      expect(params['mode'], 'immediate');
+    });
+
+    test('sendMessage sends via MessageOptions', () async {
+      final options = MessageOptions(
+        prompt: 'Test with options',
+        mode: MessageDeliveryMode.enqueue,
+        attachments: [Attachment.file('/tmp/test.txt')],
+      );
+
+      await ts.session.sendMessage(options);
+
+      final sent = ts.pair.client.sentMessages.last;
+      final params = sent['params'] as Map<String, dynamic>;
+      expect(params['prompt'], 'Test with options');
+      expect(params['mode'], 'enqueue');
+      expect(params['attachments'], isNotNull);
     });
 
     test('sendAndWait collects assistant messages and returns on idle',
@@ -1070,6 +1089,151 @@ void main() {
       const reply = AssistantReply(content: 'test');
 
       expect(reply.messageId, isNull);
+    });
+  });
+
+  // ── Agent RPCs ─────────────────────────────────────────────────────────
+
+  group('Agent RPCs', () {
+    late FakeServer fakeServer;
+    late CopilotClient client;
+    late CopilotSession session;
+
+    setUp(() async {
+      fakeServer = FakeServer();
+      client = CopilotClient(
+        options: const CopilotClientOptions(),
+        transport: fakeServer.clientTransport,
+      );
+      await client.start();
+      session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+    });
+
+    tearDown(() async {
+      try {
+        await client.stop();
+      } catch (_) {}
+      await fakeServer.close();
+    });
+
+    test('listAgents returns agent list', () async {
+      final agents = await session.listAgents();
+      expect(agents, hasLength(2));
+      expect(agents[0].name, 'code-reviewer');
+      expect(agents[0].displayName, 'Code Reviewer');
+      expect(agents[1].name, 'doc-writer');
+    });
+
+    test('getCurrentAgent returns null when none selected', () async {
+      final agent = await session.getCurrentAgent();
+      expect(agent, isNull);
+    });
+
+    test('selectAgent returns selected agent', () async {
+      final agent = await session.selectAgent('code-reviewer');
+      expect(agent.name, 'code-reviewer');
+    });
+
+    test('deselectAgent completes without error', () async {
+      await session.deselectAgent();
+    });
+  });
+
+  // ── Compaction RPC ─────────────────────────────────────────────────────
+
+  group('Compaction RPC', () {
+    late FakeServer fakeServer;
+    late CopilotClient client;
+    late CopilotSession session;
+
+    setUp(() async {
+      fakeServer = FakeServer();
+      client = CopilotClient(
+        options: const CopilotClientOptions(),
+        transport: fakeServer.clientTransport,
+      );
+      await client.start();
+      session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+    });
+
+    tearDown(() async {
+      try {
+        await client.stop();
+      } catch (_) {}
+      await fakeServer.close();
+    });
+
+    test('compact returns result', () async {
+      final result = await session.compact();
+      expect(result.success, isTrue);
+      expect(result.tokensRemoved, 500);
+      expect(result.messagesRemoved, 3);
+    });
+  });
+
+  // ── Register Tools ─────────────────────────────────────────────────────
+
+  group('registerTools', () {
+    late FakeServer fakeServer;
+    late CopilotClient client;
+    late CopilotSession session;
+
+    setUp(() async {
+      fakeServer = FakeServer();
+      client = CopilotClient(
+        options: const CopilotClientOptions(),
+        transport: fakeServer.clientTransport,
+      );
+      await client.start();
+      session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+    });
+
+    tearDown(() async {
+      try {
+        await client.stop();
+      } catch (_) {}
+      await fakeServer.close();
+    });
+
+    test('registerTools adds multiple tools', () async {
+      session.registerTools([
+        Tool(
+          name: 'tool_a',
+          handler: (a, i) async => ToolResult.success('a'),
+        ),
+        Tool(
+          name: 'tool_b',
+          handler: (a, i) async => ToolResult.success('b'),
+        ),
+      ]);
+
+      final responseA = await fakeServer.sendToolCallRequest(
+        sessionId: session.sessionId,
+        toolName: 'tool_a',
+        toolCallId: 'tc-1',
+      );
+      final resultA = responseA['result'] as Map<String, dynamic>;
+      expect(resultA['textResultForLlm'], 'a');
+
+      final responseB = await fakeServer.sendToolCallRequest(
+        sessionId: session.sessionId,
+        toolName: 'tool_b',
+        toolCallId: 'tc-2',
+      );
+      final resultB = responseB['result'] as Map<String, dynamic>;
+      expect(resultB['textResultForLlm'], 'b');
     });
   });
 }

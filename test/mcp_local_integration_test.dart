@@ -89,13 +89,12 @@ void main() {
       await client.start();
       final session = await client.createSession(
         config: SessionConfig(
-          mcpServers: [
-            McpServerConfig(
-              name: 'local-mcp-test',
+          mcpServers: {
+            'local-mcp-test': McpLocalServerConfig(
               command: Platform.resolvedExecutable,
               args: _mcpServerArgs(),
             ),
-          ],
+          },
           tools: [
             Tool(
               name: 'multiply_numbers',
@@ -121,10 +120,10 @@ void main() {
 
       final createParams = fakeServer.lastSessionCreateParams;
       expect(createParams, isNotNull);
-      final mcpServers = createParams!['mcpServers'] as List<dynamic>;
+      final mcpServers = createParams!['mcpServers'] as Map<String, dynamic>;
       expect(mcpServers, hasLength(1));
-      final mcpConfig = mcpServers.first as Map<String, dynamic>;
-      expect(mcpConfig['name'], 'local-mcp-test');
+      expect(mcpServers.containsKey('local-mcp-test'), isTrue);
+      final mcpConfig = mcpServers['local-mcp-test'] as Map<String, dynamic>;
       expect(mcpConfig['command'], Platform.resolvedExecutable);
       expect(
         (mcpConfig['args'] as List<dynamic>).contains(
@@ -133,12 +132,13 @@ void main() {
         isTrue,
       );
 
-      final toolCallResult = await fakeServer.sendToolCallRequest(
+      final toolCallResponse = await fakeServer.sendToolCallRequest(
         sessionId: session.sessionId,
         toolName: 'multiply_numbers',
         toolCallId: 'tc-local-1',
         arguments: {'x': 6, 'y': 7},
       );
+      final toolCallResult = toolCallResponse['result'] as Map<String, dynamic>;
       expect(toolCallResult['resultType'], 'success');
       expect(toolCallResult['textResultForLlm'], '42');
     });

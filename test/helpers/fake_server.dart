@@ -97,7 +97,7 @@ class FakeServer {
       _sessionCounter++;
       final sessionId = 'fake-session-$_sessionCounter';
       sessions[sessionId] = FakeSession(sessionId: sessionId);
-      return {'sessionId': sessionId};
+      return {'sessionId': sessionId, 'workspacePath': '/tmp/workspace'};
     });
 
     connection.registerRequestHandler('session.resume', (params) async {
@@ -106,7 +106,7 @@ class FakeServer {
       if (!sessions.containsKey(sessionId)) {
         throw const JsonRpcError(code: -32600, message: 'Session not found');
       }
-      return {'sessionId': sessionId};
+      return {'sessionId': sessionId, 'workspacePath': '/tmp/workspace'};
     });
 
     connection.registerRequestHandler('session.destroy', (params) async {
@@ -203,11 +203,85 @@ class FakeServer {
       'session.fleet.start',
       (params) async => <String, dynamic>{},
     );
+
+    // Agent RPCs
+    connection.registerRequestHandler(
+      'session.agent.list',
+      (params) async => {
+        'agents': [
+          {
+            'name': 'code-reviewer',
+            'displayName': 'Code Reviewer',
+            'description': 'Reviews code changes',
+          },
+          {
+            'name': 'doc-writer',
+            'displayName': 'Doc Writer',
+            'description': 'Writes documentation',
+          },
+        ],
+      },
+    );
+
+    connection.registerRequestHandler(
+      'session.agent.getCurrent',
+      (params) async => {'agent': null},
+    );
+
+    connection.registerRequestHandler(
+      'session.agent.select',
+      (params) async {
+        final p = params as Map<String, dynamic>;
+        return {
+          'agent': {
+            'name': p['name'],
+            'displayName': p['name'],
+            'description': 'Selected agent',
+          },
+        };
+      },
+    );
+
+    connection.registerRequestHandler(
+      'session.agent.deselect',
+      (params) async => <String, dynamic>{},
+    );
+
+    // Compaction RPC
+    connection.registerRequestHandler(
+      'session.compaction.compact',
+      (params) async => {
+        'success': true,
+        'tokensRemoved': 500,
+        'messagesRemoved': 3,
+      },
+    );
+
+    // Foreground/last session RPCs
+    connection.registerRequestHandler(
+      'session.getLastId',
+      (params) async => {'sessionId': null},
+    );
+
+    connection.registerRequestHandler(
+      'session.getForeground',
+      (params) async => {'sessionId': null, 'workspacePath': null},
+    );
+
+    connection.registerRequestHandler(
+      'session.setForeground',
+      (params) async => <String, dynamic>{},
+    );
   }
 
   /// Sends a session event notification to the client.
   Future<void> sendSessionEvent(Map<String, dynamic> event) async {
     await connection.sendNotification('session.event', event);
+  }
+
+  /// Sends a session lifecycle event notification to the client.
+  Future<void> sendLifecycleEvent(Map<String, dynamic> event) async {
+    await connection.sendNotification('session.lifecycle', event);
   }
 
   /// Sends a tool call request to the client and returns the result.
@@ -217,7 +291,7 @@ class FakeServer {
     required String toolCallId,
     Map<String, dynamic> arguments = const {},
   }) async {
-    final result = await connection.sendRequest('toolCall.request', {
+    final result = await connection.sendRequest('tool.call', {
       'sessionId': sessionId,
       'toolName': toolName,
       'toolCallId': toolCallId,

@@ -318,3 +318,90 @@ class ForegroundSessionInfo {
     );
   }
 }
+
+/// Information about an agent.
+class AgentInfo {
+  const AgentInfo({
+    required this.name,
+    this.displayName,
+    this.description,
+  });
+
+  final String name;
+  final String? displayName;
+  final String? description;
+
+  factory AgentInfo.fromJson(Map<String, dynamic> json) {
+    return AgentInfo(
+      name: json['name'] as String,
+      displayName: json['displayName'] as String?,
+      description: json['description'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'displayName': displayName,
+        'description': description,
+      };
+}
+
+/// Result of a compaction operation.
+class CompactionResult {
+  const CompactionResult({
+    required this.success,
+    this.tokensRemoved,
+    this.messagesRemoved,
+  });
+
+  final bool success;
+  final int? tokensRemoved;
+  final int? messagesRemoved;
+
+  factory CompactionResult.fromJson(Map<String, dynamic> json) {
+    return CompactionResult(
+      success: json['success'] as bool,
+      tokensRemoved: json['tokensRemoved'] as int?,
+      messagesRemoved: json['messagesRemoved'] as int?,
+    );
+  }
+}
+
+/// Session lifecycle event type.
+enum SessionLifecycleEventType {
+  created,
+  deleted,
+  updated,
+  foreground,
+  background;
+
+  static SessionLifecycleEventType fromString(String value) {
+    // CLI sends prefixed values like "session.created", "session.deleted", etc.
+    final bare = value.startsWith('session.') ? value.substring(8) : value;
+    return SessionLifecycleEventType.values.firstWhere(
+      (e) => e.name == bare,
+      orElse: () => SessionLifecycleEventType.updated,
+    );
+  }
+}
+
+/// A session lifecycle event emitted by the CLI.
+class SessionLifecycleEvent {
+  const SessionLifecycleEvent({
+    required this.type,
+    required this.sessionId,
+    this.metadata,
+  });
+
+  final SessionLifecycleEventType type;
+  final String sessionId;
+  final Map<String, dynamic>? metadata;
+
+  factory SessionLifecycleEvent.fromJson(Map<String, dynamic> json) {
+    return SessionLifecycleEvent(
+      type: SessionLifecycleEventType.fromString(json['type'] as String),
+      sessionId: json['sessionId'] as String,
+      metadata: json['metadata'] as Map<String, dynamic>?,
+    );
+  }
+}

@@ -111,12 +111,12 @@ void main() {
 
     group('bidirectional requests', () {
       test('server can send requests to client', () async {
-        clientConn.registerRequestHandler('toolCall.request', (params) async {
+        clientConn.registerRequestHandler('tool.call', (params) async {
           final toolName = (params as Map<String, dynamic>)['toolName'];
           return {'result': 'executed $toolName'};
         });
 
-        final result = await serverConn.sendRequest('toolCall.request', {
+        final result = await serverConn.sendRequest('tool.call', {
           'toolName': 'bash',
           'arguments': {'command': 'ls'},
         });

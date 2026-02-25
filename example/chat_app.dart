@@ -107,20 +107,14 @@ Future<void> main(List<String> args) async {
 Future<CopilotClient> _startClientWithRetry(_CliArgs args) async {
   Object? lastError;
   for (var attempt = 1; attempt <= 3; attempt++) {
-    final cliArgs = args.cliArgs.isEmpty
-        ? const ['--headless', '--stdio', '--no-auto-update']
-        : args.cliArgs;
-    final transport = StdioTransport(
-      executable: args.cliPath,
-      arguments: cliArgs,
-    );
     final candidate = CopilotClient(
-      options: const CopilotClientOptions(),
-      transport: transport,
+      options: CopilotClientOptions(
+        cliPath: args.cliPath,
+        cliArgs: args.cliArgs,
+      ),
     );
 
     try {
-      await transport.start();
       await candidate.start();
       return candidate;
     } on TimeoutException catch (e) {
@@ -200,8 +194,7 @@ void _printUsage() {
   stdout.writeln('  --model <id>      Use a specific model for the session');
   stdout.writeln(
       '  --cli-path <path> CLI executable path (default: COPILOT_CLI_PATH or copilot)');
-  stdout.writeln(
-      '  --cli-arg <arg>   Repeatable CLI arg; defaults to --headless --stdio --no-auto-update');
+  stdout.writeln('  --cli-arg <arg>   Extra CLI arg (e.g. --log-level debug)');
   stdout.writeln('  -h, --help        Show this help');
 }
 

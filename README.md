@@ -32,7 +32,7 @@ Future<void> main() async {
   // Create transport & client
   final transport = StdioTransport(
     executable: 'copilot',
-    arguments: ['--headless', '--stdio', '--no-auto-update'],
+    arguments: ['--acp', '--no-auto-update'],
   );
   await transport.start();
 
@@ -86,7 +86,7 @@ dart run example/chat_app.dart --prompt "Explain JSON-RPC in one sentence."
 dart run example/chat_app.dart --model claude-sonnet-4.5
 
 # Override CLI executable/args (for custom SDK server runtime)
-dart run example/chat_app.dart --cli-path /path/to/copilot --cli-arg --headless --cli-arg --stdio --cli-arg --no-auto-update
+dart run example/chat_app.dart --cli-path /path/to/copilot --cli-arg --acp --cli-arg --no-auto-update
 ```
 
 The app validates auth status, creates a session, handles events, sends prompts,
@@ -103,7 +103,7 @@ When using the launcher CLI, include `--no-auto-update` to avoid silent runtime 
 ```
 ┌─────────────────────┐       JSON-RPC 2.0        ┌──────────────┐
 │   CopilotClient     │ ◄─── Content-Length ────► │ Copilot CLI  │
-│   CopilotSession    │       framed stdio/TCP    │ (--headless) │
+│   CopilotSession    │       framed stdio/TCP    │ (--acp)      │
 │   Event handlers    │                           │              │
 │   Tool handlers     │  Client → Server:         │  LLM proxy   │
 │   Permission/Input  │   ping, session.create,   │  with tools  │
@@ -119,7 +119,7 @@ When using the launcher CLI, include `--no-auto-update` to avoid silent runtime 
 
 | Transport | Platform | Use Case |
 |-----------|----------|----------|
-| `StdioTransport` | Desktop/Server | Spawns `copilot --headless --stdio` process |
+| `StdioTransport` | Desktop/Server | Spawns `copilot --acp` process |
 | `TcpTransport` | Desktop/Server | Connects to running CLI server |
 | `WebSocketTransport` | Web | Connects to WebSocket bridge server |
 

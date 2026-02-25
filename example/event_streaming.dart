@@ -11,16 +11,7 @@ import 'dart:io';
 import 'package:copilot_sdk_dart/copilot_sdk_io.dart';
 
 Future<void> main() async {
-  final transport = StdioTransport(
-    executable: 'copilot',
-    arguments: ['--headless', '--stdio', '--no-auto-update'],
-  );
-  await transport.start();
-
-  final client = CopilotClient(
-    options: const CopilotClientOptions(),
-    transport: transport,
-  );
+  final client = CopilotClient();
   await client.start();
 
   final session = await client.createSession(

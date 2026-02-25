@@ -309,18 +309,28 @@ void main() {
       );
     });
 
-    test('createSession throws when not connected', () async {
+    test('createSession throws when not connected and autoStart is false',
+        () async {
+      final noAutoClient = CopilotClient(
+        options: const CopilotClientOptions(autoStart: false),
+        transport: server.clientTransport,
+      );
       expect(
-        () => client.createSession(
+        () => noAutoClient.createSession(
           config: SessionConfig(onPermissionRequest: approveAllPermissions),
         ),
         throwsStateError,
       );
     });
 
-    test('resumeSession throws when not connected', () async {
+    test('resumeSession throws when not connected and autoStart is false',
+        () async {
+      final noAutoClient = CopilotClient(
+        options: const CopilotClientOptions(autoStart: false),
+        transport: server.clientTransport,
+      );
       expect(
-        () => client.resumeSession(
+        () => noAutoClient.resumeSession(
           config: ResumeSessionConfig(
             sessionId: 'any',
             onPermissionRequest: approveAllPermissions,
@@ -478,13 +488,14 @@ void main() {
         ),
       );
 
-      final result = await server.sendToolCallRequest(
+      final response = await server.sendToolCallRequest(
         sessionId: session.sessionId,
         toolName: 'greet',
         toolCallId: 'tc-1',
         arguments: {'name': 'World'},
       );
 
+      final result = response['result'] as Map<String, dynamic>;
       expect(result['resultType'], 'success');
       expect(result['textResultForLlm'], 'Hello, World!');
     });
@@ -494,12 +505,13 @@ void main() {
         config: SessionConfig(onPermissionRequest: approveAllPermissions),
       );
 
-      final result = await server.sendToolCallRequest(
+      final response = await server.sendToolCallRequest(
         sessionId: session.sessionId,
         toolName: 'nonexistent',
         toolCallId: 'tc-1',
       );
 
+      final result = response['result'] as Map<String, dynamic>;
       expect(result['resultType'], 'failure');
       expect(result['error'], contains('Unknown tool'));
     });
@@ -513,10 +525,11 @@ void main() {
         ),
       );
 
-      final result = await server.sendPermissionRequest(
+      final response = await server.sendPermissionRequest(
         sessionId: session.sessionId,
       );
 
+      final result = response['result'] as Map<String, dynamic>;
       expect(result['kind'], 'approved');
     });
 
@@ -561,8 +574,8 @@ void main() {
           hooks: SessionHooks(
             onPreToolUse: (input, inv) async {
               return PreToolUseOutput(
-                decision: 'approve',
-                message: 'Approved: ${input.toolName}',
+                permissionDecision: 'allow',
+                permissionDecisionReason: 'Approved: ${input.toolName}',
               );
             },
           ),
@@ -575,8 +588,8 @@ void main() {
         input: {'toolName': 'bash', 'toolCallId': 'tc-1'},
       );
 
-      expect(result['decision'], 'approve');
-      expect(result['message'], 'Approved: bash');
+      expect(result['permissionDecision'], 'allow');
+      expect(result['permissionDecisionReason'], 'Approved: bash');
     });
 
     test('hook invoke returns empty map when no hooks configured', () async {
@@ -626,12 +639,13 @@ void main() {
         ),
       );
 
-      final result = await server.sendToolCallRequest(
+      final response = await server.sendToolCallRequest(
         sessionId: session.sessionId,
         toolName: 'broken',
         toolCallId: 'tc-1',
       );
 
+      final result = response['result'] as Map<String, dynamic>;
       expect(result['resultType'], 'failure');
       expect(result['error'], contains('Something went wrong'));
     });
@@ -723,6 +737,279 @@ void main() {
 
       expect(client.connectionState, ConnectionState.disconnected);
       expect(session.isDestroyed, isTrue);
+    });
+  });
+
+  // ── New Feature Tests ──────────────────────────────────────────────────
+
+  group('New client methods', () {
+    setUp(() async {
+      await client.start();
+    });
+
+    test('workspacePath is populated from createSession', () async {
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+      expect(session.workspacePath, '/tmp/workspace');
+    });
+
+    test('forceStop clears sessions without RPC', () async {
+      await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+      await client.forceStop();
+      expect(client.connectionState, ConnectionState.disconnected);
+    });
+
+    test('getLastSessionId returns null initially', () async {
+      final id = await client.getLastSessionId();
+      expect(id, isNull);
+    });
+
+    test('getForegroundSessionId returns info', () async {
+      final info = await client.getForegroundSessionId();
+      expect(info, isA<ForegroundSessionInfo>());
+    });
+
+    test('setForegroundSessionId completes', () async {
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+      await client.setForegroundSessionId(session.sessionId);
+    });
+
+    test('lifecycle event subscription fires', () async {
+      final events = <SessionLifecycleEvent>[];
+      client.onLifecycleEvent((e) => events.add(e));
+
+      await server.sendLifecycleEvent({
+        'type': 'created',
+        'sessionId': 'test-123',
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(events, hasLength(1));
+      expect(events.first.type, SessionLifecycleEventType.created);
+      expect(events.first.sessionId, 'test-123');
+    });
+
+    test('typed lifecycle event subscription filters', () async {
+      final created = <SessionLifecycleEvent>[];
+      final deleted = <SessionLifecycleEvent>[];
+      client.onLifecycleEvent(
+        (e) => created.add(e),
+        SessionLifecycleEventType.created,
+      );
+      client.onLifecycleEvent(
+        (e) => deleted.add(e),
+        SessionLifecycleEventType.deleted,
+      );
+
+      await server.sendLifecycleEvent({
+        'type': 'created',
+        'sessionId': 'test-1',
+      });
+      await server.sendLifecycleEvent({
+        'type': 'deleted',
+        'sessionId': 'test-2',
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(created, hasLength(1));
+      expect(deleted, hasLength(1));
+      expect(created.first.sessionId, 'test-1');
+      expect(deleted.first.sessionId, 'test-2');
+    });
+
+    test('lifecycle unsubscribe works', () async {
+      final events = <SessionLifecycleEvent>[];
+      final unsub = client.onLifecycleEvent((e) => events.add(e));
+
+      await server.sendLifecycleEvent({
+        'type': 'created',
+        'sessionId': 'a',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      unsub();
+
+      await server.sendLifecycleEvent({
+        'type': 'deleted',
+        'sessionId': 'b',
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(events, hasLength(1));
+    });
+  });
+
+  group('ResumeSession full config forwarding', () {
+    setUp(() async {
+      await client.start();
+    });
+
+    test('resumeSession forwards all config fields', () async {
+      // First create a session so we have a valid session ID
+      final initial = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+
+      Map<String, dynamic>? resumeParams;
+      server.overrideHandler('session.resume', (params) async {
+        resumeParams = Map<String, dynamic>.from(params as Map);
+        return {
+          'sessionId': initial.sessionId,
+          'workspacePath': '/tmp/workspace',
+        };
+      });
+
+      await client.resumeSession(
+        config: ResumeSessionConfig(
+          sessionId: initial.sessionId,
+          model: 'gpt-4o',
+          streaming: false,
+          reasoningEffort: ReasoningEffort.high,
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+
+      expect(resumeParams, isNotNull);
+      expect(resumeParams!['sessionId'], initial.sessionId);
+      expect(resumeParams!['model'], 'gpt-4o');
+      expect(resumeParams!['streaming'], isFalse);
+      expect(resumeParams!['reasoningEffort'], 'high');
+      expect(resumeParams!['requestPermission'], isTrue);
+      expect(resumeParams!['envValueMode'], 'direct');
+    });
+  });
+
+  // ── Dynamic Handler Registration ───────────────────────────────────────
+
+  group('Dynamic handler registration', () {
+    setUp(() async {
+      await client.start();
+    });
+
+    test('dynamic permission handler overrides config handler', () async {
+      var configCalled = false;
+      var dynamicCalled = false;
+
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: (req, inv) async {
+            configCalled = true;
+            return PermissionResult.denied;
+          },
+        ),
+      );
+
+      session.registerPermissionHandler((req, inv) async {
+        dynamicCalled = true;
+        return PermissionResult.approved;
+      });
+
+      final response = await server.sendPermissionRequest(
+        sessionId: session.sessionId,
+      );
+
+      final result = response['result'] as Map<String, dynamic>;
+      expect(dynamicCalled, isTrue);
+      expect(configCalled, isFalse);
+      expect(result['kind'], 'approved');
+    });
+
+    test('dynamic hooks override config hooks', () async {
+      var configHookCalled = false;
+      var dynamicHookCalled = false;
+
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+          hooks: SessionHooks(
+            onPreToolUse: (input, inv) async {
+              configHookCalled = true;
+              return const PreToolUseOutput();
+            },
+          ),
+        ),
+      );
+
+      session.registerHooks(SessionHooks(
+        onPreToolUse: (input, inv) async {
+          dynamicHookCalled = true;
+          return PreToolUseOutput(permissionDecision: 'allow');
+        },
+      ));
+
+      final result = await server.sendHookInvoke(
+        sessionId: session.sessionId,
+        hookType: 'preToolUse',
+        input: {'toolName': 'test', 'timestamp': 0, 'cwd': ''},
+      );
+
+      expect(dynamicHookCalled, isTrue);
+      expect(configHookCalled, isFalse);
+      expect(result['permissionDecision'], 'allow');
+    });
+  });
+
+  // ── AutoStart ──────────────────────────────────────────────────────────
+
+  group('AutoStart', () {
+    test('createSession auto-starts when autoStart is true', () async {
+      expect(client.isConnected, isFalse);
+
+      final session = await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+
+      expect(client.isConnected, isTrue);
+      expect(session.sessionId, isNotEmpty);
+    });
+
+    test('resumeSession auto-starts when autoStart is true', () async {
+      // Create a session first (starts implicitly via autoStart)
+      final initial = await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+      final sessionId = initial.sessionId;
+
+      // Stop the client — transport closes
+      await client.stop();
+      await server.close();
+
+      // Create fresh transport pair (simulates reconnect)
+      server = FakeServer();
+      // Pre-register the session so resume finds it
+      server.sessions[sessionId] = FakeSession(sessionId: sessionId);
+      client = CopilotClient(
+        options: const CopilotClientOptions(),
+        transport: server.clientTransport,
+      );
+
+      expect(client.isConnected, isFalse);
+
+      // Resume should auto-start the new transport
+      final resumed = await client.resumeSession(
+        config: ResumeSessionConfig(
+          sessionId: sessionId,
+          onPermissionRequest: approveAllPermissions,
+        ),
+      );
+
+      expect(client.isConnected, isTrue);
+      expect(resumed.sessionId, sessionId);
     });
   });
 }

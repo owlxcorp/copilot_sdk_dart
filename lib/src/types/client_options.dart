@@ -13,12 +13,16 @@ class CopilotClientOptions {
     this.env,
     this.githubToken,
     this.useLoggedInUser,
+    this.log,
   });
 
   /// Path to the CLI executable. If null, searches PATH for 'copilot'.
   final String? cliPath;
 
   /// Extra arguments to pass to the CLI executable.
+  ///
+  /// These are prepended before the required flags (`--headless`, `--stdio`,
+  /// `--no-auto-update`). Use for flags like `--model`, `--log-level`, etc.
   final List<String> cliArgs;
 
   /// Working directory for the CLI process.
@@ -51,6 +55,9 @@ class CopilotClientOptions {
 
   /// Whether to use the logged-in user for authentication.
   final bool? useLoggedInUser;
+
+  /// Optional log callback for SDK diagnostic messages.
+  final void Function(String message)? log;
 }
 
 /// Log levels for the CLI server.

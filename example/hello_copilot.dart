@@ -12,21 +12,13 @@ import 'dart:io';
 import 'package:copilot_sdk_dart/copilot_sdk_io.dart';
 
 Future<void> main() async {
-  // 1. Create a stdio transport that spawns the CLI
-  final transport = StdioTransport(
-    executable: 'copilot',
-    arguments: ['--headless', '--stdio', '--no-auto-update'],
-  );
-  await transport.start();
-
-  // 2. Create the client
+  // 1. Create the client (automatically spawns CLI with required flags)
   final client = CopilotClient(
     options: const CopilotClientOptions(),
-    transport: transport,
   );
   await client.start();
 
-  // 3. Check auth
+  // 2. Check auth
   final auth = await client.getAuthStatus();
   if (!auth.isAuthenticated) {
     print('Not authenticated. Run: copilot auth login');
@@ -35,14 +27,14 @@ Future<void> main() async {
   }
   print('Authenticated as: ${auth.login}');
 
-  // 4. Create a session
+  // 3. Create a session
   final session = await client.createSession(
     config: SessionConfig(
       onPermissionRequest: approveAllPermissions,
     ),
   );
 
-  // 5. Listen for events
+  // 4. Listen for events
   session.on((event) {
     switch (event) {
       case AssistantMessageEvent(:final content):
@@ -56,11 +48,11 @@ Future<void> main() async {
     }
   });
 
-  // 6. Send a message and wait for reply
+  // 5. Send a message and wait for reply
   final reply = await session.sendAndWait('What is 2 + 2?');
   print('\nReply: ${reply?.content}');
 
-  // 7. Cleanup
+  // 6. Cleanup
   await session.destroy();
   await client.stop();
 }

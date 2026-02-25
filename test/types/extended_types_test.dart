@@ -10,37 +10,52 @@ void main() {
   // ── McpServerConfig ───────────────────────────────────────────────────
 
   group('McpServerConfig', () {
-    test('toJson with all fields', () {
-      const config = McpServerConfig(
-        name: 'my-mcp',
+    test('McpLocalServerConfig toJson with all fields', () {
+      const config = McpLocalServerConfig(
         command: 'npx',
         args: ['-y', '@modelcontextprotocol/server-filesystem'],
         env: {'HOME': '/home/user'},
+        cwd: '/tmp',
       );
 
       final json = config.toJson();
 
-      expect(json['name'], 'my-mcp');
+      expect(json['type'], 'stdio');
       expect(json['command'], 'npx');
       expect(json['args'], ['-y', '@modelcontextprotocol/server-filesystem']);
       expect(json['env'], {'HOME': '/home/user'});
+      expect(json['cwd'], '/tmp');
     });
 
-    test('toJson with minimal fields', () {
-      const config = McpServerConfig(name: 'test', command: 'node');
+    test('McpLocalServerConfig toJson with minimal fields', () {
+      const config = McpLocalServerConfig(command: 'node');
 
       final json = config.toJson();
 
-      expect(json['name'], 'test');
+      expect(json['type'], 'stdio');
       expect(json['command'], 'node');
       expect(json.containsKey('args'), isFalse); // empty list omitted
       expect(json.containsKey('env'), isFalse);
     });
 
-    test('toJson omits empty args', () {
-      const config = McpServerConfig(name: 'test', command: 'node', args: []);
+    test('McpLocalServerConfig toJson omits empty args', () {
+      const config = McpLocalServerConfig(command: 'node', args: []);
 
       expect(config.toJson().containsKey('args'), isFalse);
+    });
+
+    test('McpRemoteServerConfig toJson with all fields', () {
+      const config = McpRemoteServerConfig(
+        type: 'sse',
+        url: 'https://api.example.com/mcp',
+        headers: {'Authorization': 'Bearer token'},
+      );
+
+      final json = config.toJson();
+
+      expect(json['type'], 'sse');
+      expect(json['url'], 'https://api.example.com/mcp');
+      expect(json['headers'], {'Authorization': 'Bearer token'});
     });
   });
 
@@ -51,7 +66,7 @@ void main() {
       const config = CustomAgentConfig(
         name: 'reviewer',
         description: 'Reviews code changes',
-        instructions: 'Be thorough and constructive',
+        prompt: 'Be thorough and constructive',
         tools: ['bash', 'read_file'],
       );
 
@@ -59,7 +74,7 @@ void main() {
 
       expect(json['name'], 'reviewer');
       expect(json['description'], 'Reviews code changes');
-      expect(json['instructions'], 'Be thorough and constructive');
+      expect(json['prompt'], 'Be thorough and constructive');
       expect(json['tools'], ['bash', 'read_file']);
     });
 
@@ -70,7 +85,7 @@ void main() {
 
       expect(json['name'], 'minimal');
       expect(json.containsKey('description'), isFalse);
-      expect(json.containsKey('instructions'), isFalse);
+      expect(json.containsKey('prompt'), isFalse);
       expect(json.containsKey('tools'), isFalse);
     });
   });
@@ -110,7 +125,7 @@ void main() {
       final config = SessionConfig(
         model: 'gpt-4',
         systemMessage: const SystemMessageReplace(content: 'You are helpful.'),
-        infiniteSessions: true,
+        infiniteSessions: const InfiniteSessionConfig(enabled: true),
         streaming: false,
         tools: [
           Tool(
@@ -127,9 +142,9 @@ void main() {
         ],
         availableTools: ['bash'],
         excludedTools: ['dangerous_tool'],
-        mcpServers: [
-          const McpServerConfig(name: 'fs', command: 'mcp-fs'),
-        ],
+        mcpServers: {
+          'fs': const McpLocalServerConfig(command: 'mcp-fs'),
+        },
         customAgents: [
           const CustomAgentConfig(name: 'agent1'),
         ],
@@ -137,7 +152,7 @@ void main() {
         provider: const ProviderConfig(type: 'openai', apiKey: 'key'),
         reasoningEffort: ReasoningEffort.high,
         mode: AgentMode.autopilot,
-        attachments: [Attachment.file('/tmp/test.txt')],
+        attachments: [const FileAttachment('/tmp/test.txt')],
         onPermissionRequest: approveAllPermissions,
       );
 
@@ -146,18 +161,21 @@ void main() {
       expect(json['model'], 'gpt-4');
       expect(json['systemMessage'],
           {'mode': 'replace', 'content': 'You are helpful.'});
-      expect(json['infiniteSessions'], isTrue);
+      expect(json['infiniteSessions'], {'enabled': true});
       expect(json['streaming'], isFalse);
       expect((json['tools'] as List).length, 1);
       expect(json['availableTools'], ['bash']);
       expect(json['excludedTools'], ['dangerous_tool']);
-      expect((json['mcpServers'] as List).length, 1);
+      expect((json['mcpServers'] as Map).length, 1);
       expect((json['customAgents'] as List).length, 1);
       expect(json['skillDirectories'], ['/skills']);
       expect(json['provider'], isNotNull);
       expect(json['reasoningEffort'], 'high');
       expect(json['mode'], 'autopilot');
       expect((json['attachments'] as List).length, 1);
+      // Capability flags
+      expect(json['requestPermission'], isTrue);
+      expect(json['envValueMode'], 'direct');
     });
 
     test('toJson with minimal config', () {
@@ -204,14 +222,14 @@ void main() {
       final options = MessageOptions(
         prompt: 'Hello',
         attachments: [Attachment.file('/tmp/image.png')],
-        mode: AgentMode.plan,
+        mode: MessageDeliveryMode.immediate,
       );
 
       final json = options.toJson();
 
       expect(json['prompt'], 'Hello');
       expect((json['attachments'] as List).length, 1);
-      expect(json['mode'], 'plan');
+      expect(json['mode'], 'immediate');
     });
 
     test('toJson with prompt only', () {
@@ -349,6 +367,33 @@ void main() {
     });
   });
 
+  // ── MessageDeliveryMode ─────────────────────────────────────────────
+
+  group('MessageDeliveryMode', () {
+    test('toJsonValue returns name', () {
+      expect(MessageDeliveryMode.enqueue.toJsonValue(), 'enqueue');
+      expect(MessageDeliveryMode.immediate.toJsonValue(), 'immediate');
+    });
+
+    test('fromJson parses known values', () {
+      expect(
+        MessageDeliveryMode.fromJson('enqueue'),
+        MessageDeliveryMode.enqueue,
+      );
+      expect(
+        MessageDeliveryMode.fromJson('immediate'),
+        MessageDeliveryMode.immediate,
+      );
+    });
+
+    test('fromJson defaults to enqueue for unknown', () {
+      expect(
+        MessageDeliveryMode.fromJson('unknown'),
+        MessageDeliveryMode.enqueue,
+      );
+    });
+  });
+
   // ── ReasoningEffort ───────────────────────────────────────────────────
 
   group('ReasoningEffort', () {
@@ -365,42 +410,53 @@ void main() {
     test('file factory', () {
       final att = Attachment.file('/tmp/test.txt');
 
-      expect(att.type, 'file');
-      expect(att.path, '/tmp/test.txt');
+      expect(att, isA<FileAttachment>());
+      expect((att as FileAttachment).path, '/tmp/test.txt');
       expect(att.toJson(), {'type': 'file', 'path': '/tmp/test.txt'});
     });
 
-    test('image factory', () {
-      final att = Attachment.image(
-        data: 'base64data==',
-        mimeType: 'image/png',
-      );
+    test('file factory with displayName', () {
+      final att = Attachment.file('/tmp/test.txt', displayName: 'test.txt');
 
-      expect(att.type, 'image');
-      expect(att.data, 'base64data==');
-      expect(att.mimeType, 'image/png');
+      expect((att as FileAttachment).displayName, 'test.txt');
+      expect(att.toJson(), {
+        'type': 'file',
+        'path': '/tmp/test.txt',
+        'displayName': 'test.txt',
+      });
     });
 
-    test('toJson omits null fields', () {
+    test('directory factory', () {
+      final att = Attachment.directory('/tmp/project');
+
+      expect(att, isA<DirectoryAttachment>());
+      expect((att as DirectoryAttachment).path, '/tmp/project');
+      expect(att.toJson(), {'type': 'directory', 'path': '/tmp/project'});
+    });
+
+    test('selection factory', () {
+      final att = Attachment.selection(
+        filePath: '/tmp/test.dart',
+        text: 'selected code',
+        selection: const SelectionRange(
+          start: SelectionPosition(line: 1, character: 0),
+          end: SelectionPosition(line: 5, character: 10),
+        ),
+      );
+
+      expect(att, isA<SelectionAttachment>());
+      final json = att.toJson();
+      expect(json['type'], 'selection');
+      expect(json['filePath'], '/tmp/test.dart');
+      expect(json['text'], 'selected code');
+      expect(json['selection'], isNotNull);
+    });
+
+    test('file toJson omits null displayName', () {
       final att = Attachment.file('/test');
       final json = att.toJson();
 
-      expect(json.containsKey('url'), isFalse);
-      expect(json.containsKey('data'), isFalse);
-      expect(json.containsKey('mimeType'), isFalse);
-    });
-
-    test('full constructor with all fields', () {
-      const att = Attachment(
-        type: 'url',
-        url: 'https://example.com/file.txt',
-        mimeType: 'text/plain',
-      );
-
-      final json = att.toJson();
-      expect(json['type'], 'url');
-      expect(json['url'], 'https://example.com/file.txt');
-      expect(json['mimeType'], 'text/plain');
+      expect(json.containsKey('displayName'), isFalse);
     });
   });
 
@@ -982,6 +1038,254 @@ void main() {
       );
 
       expect(result.kind, 'approved');
+    });
+  });
+
+  // ── New Types: InfiniteSessionConfig ──────────────────────────────────
+
+  group('InfiniteSessionConfig', () {
+    test('toJson with all fields', () {
+      const config = InfiniteSessionConfig(
+        enabled: true,
+        backgroundCompactionThreshold: 80,
+        bufferExhaustionThreshold: 95,
+      );
+      final json = config.toJson();
+      expect(json['enabled'], isTrue);
+      expect(json['backgroundCompactionThreshold'], 80);
+      expect(json['bufferExhaustionThreshold'], 95);
+    });
+
+    test('toJson with minimal fields', () {
+      const config = InfiniteSessionConfig();
+      final json = config.toJson();
+      expect(json.isEmpty, isTrue);
+    });
+  });
+
+  // ── New Types: ToolBinaryResult ───────────────────────────────────────
+
+  group('ToolBinaryResult', () {
+    test('toJson with all fields', () {
+      const r = ToolBinaryResult(
+        data: 'base64data==',
+        mimeType: 'image/png',
+        type: 'image',
+        description: 'A chart',
+      );
+      final json = r.toJson();
+      expect(json['data'], 'base64data==');
+      expect(json['mimeType'], 'image/png');
+      expect(json['type'], 'image');
+      expect(json['description'], 'A chart');
+    });
+
+    test('toJson without optional fields', () {
+      const r = ToolBinaryResult(
+        data: 'abc',
+        mimeType: 'application/pdf',
+      );
+      final json = r.toJson();
+      expect(json['data'], 'abc');
+      expect(json['mimeType'], 'application/pdf');
+      expect(json.containsKey('type'), isFalse);
+      expect(json.containsKey('description'), isFalse);
+    });
+  });
+
+  // ── New Types: AgentInfo ──────────────────────────────────────────────
+
+  group('AgentInfo', () {
+    test('fromJson parses correctly', () {
+      final info = AgentInfo.fromJson({
+        'name': 'code-reviewer',
+        'displayName': 'Code Reviewer',
+        'description': 'Reviews code changes',
+      });
+      expect(info.name, 'code-reviewer');
+      expect(info.displayName, 'Code Reviewer');
+      expect(info.description, 'Reviews code changes');
+    });
+
+    test('toJson round-trips', () {
+      final info = AgentInfo.fromJson({
+        'name': 'test',
+        'displayName': 'Test Agent',
+      });
+      final json = info.toJson();
+      expect(json['name'], 'test');
+      expect(json['displayName'], 'Test Agent');
+      expect(json['description'], isNull);
+    });
+  });
+
+  // ── New Types: CompactionResult ───────────────────────────────────────
+
+  group('CompactionResult', () {
+    test('fromJson parses correctly', () {
+      final r = CompactionResult.fromJson({
+        'success': true,
+        'tokensRemoved': 500,
+        'messagesRemoved': 3,
+      });
+      expect(r.success, isTrue);
+      expect(r.tokensRemoved, 500);
+      expect(r.messagesRemoved, 3);
+    });
+  });
+
+  // ── New Types: SessionLifecycleEvent ──────────────────────────────────
+
+  group('SessionLifecycleEvent', () {
+    test('fromJson parses created event with session. prefix', () {
+      final e = SessionLifecycleEvent.fromJson({
+        'type': 'session.created',
+        'sessionId': 'sess-1',
+        'metadata': {'foo': 'bar'},
+      });
+      expect(e.type, SessionLifecycleEventType.created);
+      expect(e.sessionId, 'sess-1');
+      expect(e.metadata?['foo'], 'bar');
+    });
+
+    test('fromJson also handles bare type names', () {
+      final e = SessionLifecycleEvent.fromJson({
+        'type': 'created',
+        'sessionId': 'sess-1',
+      });
+      expect(e.type, SessionLifecycleEventType.created);
+    });
+
+    test('fromJson handles all lifecycle types with session. prefix', () {
+      for (final t in [
+        'created',
+        'deleted',
+        'updated',
+        'foreground',
+        'background'
+      ]) {
+        final e = SessionLifecycleEvent.fromJson({
+          'type': 'session.$t',
+          'sessionId': 'x',
+        });
+        expect(e.type.name, t);
+      }
+    });
+  });
+
+  // ── New Types: ForegroundSessionInfo ──────────────────────────────────
+
+  group('ForegroundSessionInfo', () {
+    test('fromJson parses correctly', () {
+      final info = ForegroundSessionInfo.fromJson({
+        'sessionId': 'fg-1',
+        'workspacePath': '/tmp/ws',
+      });
+      expect(info.sessionId, 'fg-1');
+      expect(info.workspacePath, '/tmp/ws');
+    });
+
+    test('fromJson with nulls', () {
+      final info = ForegroundSessionInfo.fromJson({});
+      expect(info.sessionId, isNull);
+      expect(info.workspacePath, isNull);
+    });
+  });
+
+  // ── New Types: AzureProviderOptions ───────────────────────────────────
+
+  group('AzureProviderOptions', () {
+    test('toJson', () {
+      const opts = AzureProviderOptions(apiVersion: '2024-01-01');
+      expect(opts.toJson(), {'apiVersion': '2024-01-01'});
+    });
+
+    test('toJson omits null', () {
+      const opts = AzureProviderOptions();
+      expect(opts.toJson().isEmpty, isTrue);
+    });
+  });
+
+  // ── ReasoningEffort xhigh ─────────────────────────────────────────────
+
+  group('ReasoningEffort xhigh', () {
+    test('xhigh value serializes correctly', () {
+      expect(ReasoningEffort.xhigh.toJsonValue(), 'xhigh');
+    });
+  });
+
+  // ── McpRemoteServerConfig ─────────────────────────────────────────────
+
+  group('McpRemoteServerConfig', () {
+    test('toJson for http type', () {
+      const config = McpRemoteServerConfig(
+        type: 'http',
+        url: 'https://example.com/mcp',
+        headers: {'Authorization': 'Bearer token'},
+      );
+      final json = config.toJson();
+      expect(json['type'], 'http');
+      expect(json['url'], 'https://example.com/mcp');
+      expect(json['headers']?['Authorization'], 'Bearer token');
+    });
+
+    test('toJson for sse type', () {
+      const config = McpRemoteServerConfig(
+        type: 'sse',
+        url: 'https://example.com/sse',
+      );
+      final json = config.toJson();
+      expect(json['type'], 'sse');
+      expect(json['url'], 'https://example.com/sse');
+      expect(json.containsKey('headers'), isFalse);
+    });
+  });
+
+  // ── ProviderConfig expanded ───────────────────────────────────────────
+
+  group('ProviderConfig expanded', () {
+    test('toJson with bearerToken and azure', () {
+      const config = ProviderConfig(
+        type: 'azure-openai',
+        bearerToken: 'tok-123',
+        wireApi: 'chat',
+        azure: AzureProviderOptions(apiVersion: '2024-06-01'),
+      );
+      final json = config.toJson();
+      expect(json['type'], 'azure-openai');
+      expect(json['bearerToken'], 'tok-123');
+      expect(json['wireApi'], 'chat');
+      expect(json['azure'], {'apiVersion': '2024-06-01'});
+    });
+
+    test('apiKey is optional', () {
+      const config = ProviderConfig(type: 'test');
+      final json = config.toJson();
+      expect(json['type'], 'test');
+      expect(json.containsKey('apiKey'), isFalse);
+    });
+  });
+
+  // ── ResumeSessionConfig toJson ────────────────────────────────────────
+
+  group('ResumeSessionConfig toJson', () {
+    test('serializes all fields', () {
+      final config = ResumeSessionConfig(
+        sessionId: 'sess-1',
+        model: 'gpt-4o',
+        streaming: true,
+        reasoningEffort: ReasoningEffort.medium,
+        disableResume: true,
+        onPermissionRequest: approveAllPermissions,
+      );
+      final json = config.toJson();
+      expect(json['sessionId'], 'sess-1');
+      expect(json['model'], 'gpt-4o');
+      expect(json['streaming'], isTrue);
+      expect(json['reasoningEffort'], 'medium');
+      expect(json['disableResume'], isTrue);
+      expect(json['requestPermission'], isTrue);
+      expect(json['envValueMode'], 'direct');
     });
   });
 }

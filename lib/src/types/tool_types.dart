@@ -109,6 +109,8 @@ class ToolResultObject extends ToolResult {
     required this.resultType,
     this.error,
     this.toolTelemetry,
+    this.binaryResultsForLlm,
+    this.sessionLog,
   });
 
   final String textResultForLlm;
@@ -116,12 +118,51 @@ class ToolResultObject extends ToolResult {
   final String? error;
   final Map<String, dynamic>? toolTelemetry;
 
+  /// Binary results (images, files) to include in the LLM context.
+  final List<ToolBinaryResult>? binaryResultsForLlm;
+
+  /// Log message to record in the session history.
+  final String? sessionLog;
+
   @override
   Map<String, dynamic> toJson() => {
         'textResultForLlm': textResultForLlm,
         'resultType': resultType.toJsonValue(),
         if (error != null) 'error': error,
         'toolTelemetry': toolTelemetry ?? <String, dynamic>{},
+        if (binaryResultsForLlm != null)
+          'binaryResultsForLlm':
+              binaryResultsForLlm!.map((b) => b.toJson()).toList(),
+        if (sessionLog != null) 'sessionLog': sessionLog,
+      };
+}
+
+/// Binary data result from a tool (images, files, etc.).
+class ToolBinaryResult {
+  const ToolBinaryResult({
+    required this.data,
+    required this.mimeType,
+    this.type,
+    this.description,
+  });
+
+  /// Base64-encoded binary data.
+  final String data;
+
+  /// MIME type (e.g., 'image/png', 'application/pdf').
+  final String mimeType;
+
+  /// Result type identifier.
+  final String? type;
+
+  /// Optional description of the binary content.
+  final String? description;
+
+  Map<String, dynamic> toJson() => {
+        'data': data,
+        'mimeType': mimeType,
+        if (type != null) 'type': type,
+        if (description != null) 'description': description,
       };
 }
 

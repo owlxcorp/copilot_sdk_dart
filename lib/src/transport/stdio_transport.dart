@@ -6,8 +6,8 @@ import 'json_rpc_transport.dart';
 
 /// Transport that communicates with the Copilot CLI via stdio (stdin/stdout).
 ///
-/// Spawns the CLI process with `--headless` and communicates via
-/// Content-Length framed JSON-RPC messages over stdin/stdout pipes.
+/// Spawns the CLI process with `--headless --stdio` flags and communicates
+/// via Content-Length framed JSON-RPC messages over stdin/stdout pipes.
 class StdioTransport implements JsonRpcTransport {
   /// Creates a transport that spawns a CLI process.
   ///
@@ -47,6 +47,13 @@ class StdioTransport implements JsonRpcTransport {
   Future<void>? _closeFuture;
   StreamController<Map<String, dynamic>>? _messageController;
   StreamSubscription<Map<String, dynamic>>? _subscription;
+
+  /// Serialization chain for stdin writes.
+  ///
+  /// Concurrent calls to [send] (e.g., multiple incoming request responses)
+  /// can cause "StreamSink is bound to a stream" errors on the process stdin.
+  /// We chain writes so each waits for the previous one to finish.
+  Future<void>? _pendingWrite;
 
   /// The stderr output from the CLI process (for diagnostics).
   final StringBuffer stderrBuffer = StringBuffer();
@@ -105,9 +112,26 @@ class StdioTransport implements JsonRpcTransport {
     if (!_isOpen || _process == null) {
       throw StateError('Transport is not open');
     }
+
     final encoded = _codec.encode(message);
-    _process!.stdin.add(encoded);
-    await _process!.stdin.flush();
+
+    // Serialize writes to prevent concurrent stdin access.
+    // Dart is single-threaded so the synchronous read+set of
+    // _pendingWrite is atomic (no interleaving before the await).
+    final prev = _pendingWrite;
+    final completer = Completer<void>();
+    _pendingWrite = completer.future;
+
+    try {
+      if (prev != null) await prev;
+      _process!.stdin.add(encoded);
+      await _process!.stdin.flush();
+    } finally {
+      completer.complete();
+      if (_pendingWrite == completer.future) {
+        _pendingWrite = null;
+      }
+    }
   }
 
   @override

@@ -38,7 +38,7 @@ void main() {
 
     test('returns true when onSessionStart is set', () {
       final hooks = SessionHooks(
-        onSessionStart: (input, inv) async {},
+        onSessionStart: (input, inv) async => null,
       );
 
       expect(hooks.hasHooks, isTrue);
@@ -46,7 +46,7 @@ void main() {
 
     test('returns true when onSessionEnd is set', () {
       final hooks = SessionHooks(
-        onSessionEnd: (input, inv) async {},
+        onSessionEnd: (input, inv) async => null,
       );
 
       expect(hooks.hasHooks, isTrue);
@@ -54,7 +54,7 @@ void main() {
 
     test('returns true when onErrorOccurred is set', () {
       final hooks = SessionHooks(
-        onErrorOccurred: (input, inv) async {},
+        onErrorOccurred: (input, inv) async => null,
       );
 
       expect(hooks.hasHooks, isTrue);
@@ -66,9 +66,9 @@ void main() {
         onPostToolUse: (i, inv) async => const PostToolUseOutput(),
         onUserPromptSubmitted: (i, inv) async =>
             const UserPromptSubmittedOutput(),
-        onSessionStart: (i, inv) async {},
-        onSessionEnd: (i, inv) async {},
-        onErrorOccurred: (i, inv) async {},
+        onSessionStart: (i, inv) async => null,
+        onSessionEnd: (i, inv) async => null,
+        onErrorOccurred: (i, inv) async => null,
       );
 
       expect(hooks.hasHooks, isTrue);
@@ -87,8 +87,8 @@ void main() {
           receivedInput = input;
           receivedInv = inv;
           return PreToolUseOutput(
-            decision: 'approve',
-            message: 'Approved: ${input.toolName}',
+            permissionDecision: 'allow',
+            permissionDecisionReason: 'Approved: ${input.toolName}',
           );
         },
       );
@@ -97,24 +97,26 @@ void main() {
         'preToolUse',
         {
           'toolName': 'bash',
-          'toolCallId': 'tc-1',
-          'arguments': {'cmd': 'ls'}
+          'toolArgs': {'cmd': 'ls'},
+          'timestamp': 1234567890,
+          'cwd': '/tmp',
         },
         'session-1',
       );
 
       expect(receivedInput, isNotNull);
       expect(receivedInput!.toolName, 'bash');
-      expect(receivedInput!.toolCallId, 'tc-1');
-      expect(receivedInput!.arguments, {'cmd': 'ls'});
+      expect(receivedInput!.toolArgs, {'cmd': 'ls'});
+      expect(receivedInput!.timestamp, 1234567890);
+      expect(receivedInput!.cwd, '/tmp');
 
       expect(receivedInv, isNotNull);
       expect(receivedInv!.sessionId, 'session-1');
 
       expect(result, isA<PreToolUseOutput>());
       final output = result as PreToolUseOutput;
-      expect(output.decision, 'approve');
-      expect(output.message, 'Approved: bash');
+      expect(output.permissionDecision, 'allow');
+      expect(output.permissionDecisionReason, 'Approved: bash');
     });
 
     test('dispatches postToolUse hook', () async {
@@ -123,22 +125,28 @@ void main() {
       final hooks = SessionHooks(
         onPostToolUse: (input, inv) async {
           receivedInput = input;
-          return PostToolUseOutput(updatedResult: 'modified result');
+          return PostToolUseOutput(modifiedResult: 'modified result');
         },
       );
 
       final result = await hooks.invoke(
         'postToolUse',
-        {'toolName': 'bash', 'toolCallId': 'tc-2', 'result': 'original'},
+        {
+          'toolName': 'bash',
+          'toolArgs': {'cmd': 'ls'},
+          'toolResult': 'original',
+          'timestamp': 100,
+          'cwd': '/home',
+        },
         'session-1',
       );
 
       expect(receivedInput!.toolName, 'bash');
-      expect(receivedInput!.toolCallId, 'tc-2');
-      expect(receivedInput!.result, 'original');
+      expect(receivedInput!.toolArgs, {'cmd': 'ls'});
+      expect(receivedInput!.toolResult, 'original');
 
       expect(result, isA<PostToolUseOutput>());
-      expect((result as PostToolUseOutput).updatedResult, 'modified result');
+      expect((result as PostToolUseOutput).modifiedResult, 'modified result');
     });
 
     test('dispatches userPromptSubmitted hook', () async {
@@ -148,14 +156,14 @@ void main() {
         onUserPromptSubmitted: (input, inv) async {
           receivedInput = input;
           return UserPromptSubmittedOutput(
-            updatedPrompt: 'Modified: ${input.prompt}',
+            modifiedPrompt: 'Modified: ${input.prompt}',
           );
         },
       );
 
       final result = await hooks.invoke(
         'userPromptSubmitted',
-        {'prompt': 'Hello Copilot'},
+        {'prompt': 'Hello Copilot', 'timestamp': 100, 'cwd': '/home'},
         'session-1',
       );
 
@@ -163,7 +171,7 @@ void main() {
 
       expect(result, isA<UserPromptSubmittedOutput>());
       expect(
-        (result as UserPromptSubmittedOutput).updatedPrompt,
+        (result as UserPromptSubmittedOutput).modifiedPrompt,
         'Modified: Hello Copilot',
       );
     });
@@ -174,16 +182,17 @@ void main() {
       final hooks = SessionHooks(
         onSessionStart: (input, inv) async {
           receivedInput = input;
+          return null;
         },
       );
 
       final result = await hooks.invoke(
         'sessionStart',
-        {'sessionId': 'session-42'},
+        {'source': 'new', 'timestamp': 100, 'cwd': '/tmp'},
         'session-42',
       );
 
-      expect(receivedInput!.sessionId, 'session-42');
+      expect(receivedInput!.source, 'new');
       expect(result, isNull);
     });
 
@@ -193,17 +202,23 @@ void main() {
       final hooks = SessionHooks(
         onSessionEnd: (input, inv) async {
           receivedInput = input;
+          return null;
         },
       );
 
       final result = await hooks.invoke(
         'sessionEnd',
-        {'sessionId': 'session-42', 'summary': 'Task completed'},
+        {
+          'reason': 'complete',
+          'finalMessage': 'Task completed',
+          'timestamp': 100,
+          'cwd': '/tmp',
+        },
         'session-42',
       );
 
-      expect(receivedInput!.sessionId, 'session-42');
-      expect(receivedInput!.summary, 'Task completed');
+      expect(receivedInput!.reason, 'complete');
+      expect(receivedInput!.finalMessage, 'Task completed');
       expect(result, isNull);
     });
 
@@ -213,22 +228,25 @@ void main() {
       final hooks = SessionHooks(
         onErrorOccurred: (input, inv) async {
           receivedInput = input;
+          return null;
         },
       );
 
       final result = await hooks.invoke(
         'errorOccurred',
         {
-          'errorType': 'RuntimeError',
-          'message': 'Something failed',
-          'stack': 'at line 42',
+          'error': 'Something failed',
+          'errorContext': 'tool_execution',
+          'recoverable': true,
+          'timestamp': 100,
+          'cwd': '/tmp',
         },
         'session-1',
       );
 
-      expect(receivedInput!.errorType, 'RuntimeError');
-      expect(receivedInput!.message, 'Something failed');
-      expect(receivedInput!.stack, 'at line 42');
+      expect(receivedInput!.error, 'Something failed');
+      expect(receivedInput!.errorContext, 'tool_execution');
+      expect(receivedInput!.recoverable, isTrue);
       expect(result, isNull);
     });
 
@@ -251,7 +269,7 @@ void main() {
 
       final result = await hooks.invoke(
         'preToolUse',
-        {'toolName': 'test'},
+        {'toolName': 'test', 'timestamp': 0, 'cwd': ''},
         'session-1',
       );
 
@@ -265,13 +283,15 @@ void main() {
     test('fromJson with all fields', () {
       final input = PreToolUseInput.fromJson({
         'toolName': 'bash',
-        'toolCallId': 'tc-1',
-        'arguments': {'cmd': 'ls -la'},
+        'toolArgs': {'cmd': 'ls -la'},
+        'timestamp': 1234567890,
+        'cwd': '/workspace',
       });
 
       expect(input.toolName, 'bash');
-      expect(input.toolCallId, 'tc-1');
-      expect(input.arguments, {'cmd': 'ls -la'});
+      expect(input.toolArgs, {'cmd': 'ls -la'});
+      expect(input.timestamp, 1234567890);
+      expect(input.cwd, '/workspace');
     });
 
     test('fromJson with minimal fields', () {
@@ -280,24 +300,38 @@ void main() {
       });
 
       expect(input.toolName, 'test');
-      expect(input.toolCallId, isNull);
-      expect(input.arguments, isNull);
+      expect(input.toolArgs, isNull);
+      expect(input.timestamp, 0);
+      expect(input.cwd, '');
+    });
+
+    test('fromJson falls back from arguments to toolArgs', () {
+      final input = PreToolUseInput.fromJson({
+        'toolName': 'test',
+        'arguments': {'a': 1},
+      });
+
+      expect(input.toolArgs, {'a': 1});
     });
   });
 
   group('PreToolUseOutput', () {
     test('toJson with all fields', () {
       const output = PreToolUseOutput(
-        decision: 'reject',
-        message: 'Not allowed',
-        updatedArguments: {'safe': true},
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Not allowed',
+        modifiedArgs: {'safe': true},
+        additionalContext: 'extra info',
+        suppressOutput: true,
       );
 
       final json = output.toJson();
 
-      expect(json['decision'], 'reject');
-      expect(json['message'], 'Not allowed');
-      expect(json['updatedArguments'], {'safe': true});
+      expect(json['permissionDecision'], 'deny');
+      expect(json['permissionDecisionReason'], 'Not allowed');
+      expect(json['modifiedArgs'], {'safe': true});
+      expect(json['additionalContext'], 'extra info');
+      expect(json['suppressOutput'], true);
     });
 
     test('toJson with no fields returns empty map', () {
@@ -312,21 +346,40 @@ void main() {
     test('fromJson parses correctly', () {
       final input = PostToolUseInput.fromJson({
         'toolName': 'read_file',
-        'toolCallId': 'tc-5',
-        'result': 'file content here',
+        'toolArgs': {'path': '/tmp/f'},
+        'toolResult': 'file content here',
+        'timestamp': 999,
+        'cwd': '/workspace',
       });
 
       expect(input.toolName, 'read_file');
-      expect(input.toolCallId, 'tc-5');
-      expect(input.result, 'file content here');
+      expect(input.toolArgs, {'path': '/tmp/f'});
+      expect(input.toolResult, 'file content here');
+    });
+
+    test('fromJson falls back from result to toolResult', () {
+      final input = PostToolUseInput.fromJson({
+        'toolName': 'read_file',
+        'result': 'fallback result',
+      });
+
+      expect(input.toolResult, 'fallback result');
     });
   });
 
   group('PostToolUseOutput', () {
-    test('toJson includes updatedResult', () {
-      const output = PostToolUseOutput(updatedResult: 'modified');
+    test('toJson includes modifiedResult and extras', () {
+      const output = PostToolUseOutput(
+        modifiedResult: 'modified',
+        additionalContext: 'ctx',
+        suppressOutput: false,
+      );
 
-      expect(output.toJson(), {'updatedResult': 'modified'});
+      expect(output.toJson(), {
+        'modifiedResult': 'modified',
+        'additionalContext': 'ctx',
+        'suppressOutput': false,
+      });
     });
 
     test('toJson empty when no result', () {
@@ -337,22 +390,32 @@ void main() {
   });
 
   group('UserPromptSubmittedInput', () {
-    test('fromJson parses prompt', () {
+    test('fromJson parses prompt with base fields', () {
       final input = UserPromptSubmittedInput.fromJson({
         'prompt': 'Write a test',
+        'timestamp': 42,
+        'cwd': '/home',
       });
 
       expect(input.prompt, 'Write a test');
+      expect(input.timestamp, 42);
+      expect(input.cwd, '/home');
     });
   });
 
   group('UserPromptSubmittedOutput', () {
-    test('toJson with updatedPrompt', () {
+    test('toJson with modifiedPrompt and extras', () {
       const output = UserPromptSubmittedOutput(
-        updatedPrompt: 'Modified prompt',
+        modifiedPrompt: 'Modified prompt',
+        additionalContext: 'additional',
+        suppressOutput: true,
       );
 
-      expect(output.toJson(), {'updatedPrompt': 'Modified prompt'});
+      expect(output.toJson(), {
+        'modifiedPrompt': 'Modified prompt',
+        'additionalContext': 'additional',
+        'suppressOutput': true,
+      });
     });
 
     test('toJson empty when no update', () {
@@ -363,53 +426,140 @@ void main() {
   });
 
   group('SessionStartInput', () {
-    test('fromJson parses sessionId', () {
-      final input = SessionStartInput.fromJson({'sessionId': 's-1'});
+    test('fromJson parses upstream fields', () {
+      final input = SessionStartInput.fromJson({
+        'source': 'resume',
+        'initialPrompt': 'Hello',
+        'timestamp': 100,
+        'cwd': '/tmp',
+      });
 
-      expect(input.sessionId, 's-1');
+      expect(input.source, 'resume');
+      expect(input.initialPrompt, 'Hello');
+      expect(input.timestamp, 100);
+      expect(input.cwd, '/tmp');
+    });
+
+    test('fromJson with minimal fields uses defaults', () {
+      final input = SessionStartInput.fromJson({});
+
+      expect(input.source, 'new');
+      expect(input.initialPrompt, isNull);
+    });
+  });
+
+  group('SessionStartOutput', () {
+    test('toJson with all fields', () {
+      const output = SessionStartOutput(
+        additionalContext: 'ctx',
+        modifiedConfig: {'key': 'value'},
+      );
+
+      expect(output.toJson(), {
+        'additionalContext': 'ctx',
+        'modifiedConfig': {'key': 'value'},
+      });
+    });
+
+    test('toJson empty when no fields', () {
+      const output = SessionStartOutput();
+      expect(output.toJson(), isEmpty);
     });
   });
 
   group('SessionEndInput', () {
-    test('fromJson with summary', () {
+    test('fromJson with all fields', () {
       final input = SessionEndInput.fromJson({
-        'sessionId': 's-1',
-        'summary': 'Done',
+        'reason': 'error',
+        'finalMessage': 'Done',
+        'error': 'something broke',
+        'timestamp': 100,
+        'cwd': '/tmp',
       });
 
-      expect(input.sessionId, 's-1');
-      expect(input.summary, 'Done');
+      expect(input.reason, 'error');
+      expect(input.finalMessage, 'Done');
+      expect(input.error, 'something broke');
     });
 
-    test('fromJson without summary', () {
-      final input = SessionEndInput.fromJson({
-        'sessionId': 's-1',
-      });
+    test('fromJson with minimal fields', () {
+      final input = SessionEndInput.fromJson({});
 
-      expect(input.summary, isNull);
+      expect(input.reason, 'complete');
+      expect(input.finalMessage, isNull);
+      expect(input.error, isNull);
+    });
+  });
+
+  group('SessionEndOutput', () {
+    test('toJson with all fields', () {
+      const output = SessionEndOutput(
+        suppressOutput: true,
+        cleanupActions: ['close-db', 'flush-logs'],
+        sessionSummary: 'summary',
+      );
+
+      expect(output.toJson(), {
+        'suppressOutput': true,
+        'cleanupActions': ['close-db', 'flush-logs'],
+        'sessionSummary': 'summary',
+      });
+    });
+
+    test('toJson empty when no fields', () {
+      const output = SessionEndOutput();
+      expect(output.toJson(), isEmpty);
     });
   });
 
   group('ErrorOccurredInput', () {
     test('fromJson with all fields', () {
       final input = ErrorOccurredInput.fromJson({
-        'errorType': 'TypeError',
-        'message': 'null is not an object',
-        'stack': 'at main.dart:42',
+        'error': 'null is not an object',
+        'errorContext': 'model_call',
+        'recoverable': true,
+        'timestamp': 100,
+        'cwd': '/tmp',
       });
 
-      expect(input.errorType, 'TypeError');
-      expect(input.message, 'null is not an object');
-      expect(input.stack, 'at main.dart:42');
+      expect(input.error, 'null is not an object');
+      expect(input.errorContext, 'model_call');
+      expect(input.recoverable, isTrue);
     });
 
-    test('fromJson without stack', () {
+    test('fromJson falls back from errorType/message to error/errorContext',
+        () {
       final input = ErrorOccurredInput.fromJson({
-        'errorType': 'Error',
+        'errorType': 'TypeError',
         'message': 'oops',
       });
 
-      expect(input.stack, isNull);
+      expect(input.error, 'oops');
+      expect(input.errorContext, 'TypeError');
+      expect(input.recoverable, isFalse);
+    });
+  });
+
+  group('ErrorOccurredOutput', () {
+    test('toJson with all fields', () {
+      const output = ErrorOccurredOutput(
+        suppressOutput: true,
+        errorHandling: 'retry',
+        retryCount: 3,
+        userNotification: 'Retrying...',
+      );
+
+      expect(output.toJson(), {
+        'suppressOutput': true,
+        'errorHandling': 'retry',
+        'retryCount': 3,
+        'userNotification': 'Retrying...',
+      });
+    });
+
+    test('toJson empty when no fields', () {
+      const output = ErrorOccurredOutput();
+      expect(output.toJson(), isEmpty);
     });
   });
 
