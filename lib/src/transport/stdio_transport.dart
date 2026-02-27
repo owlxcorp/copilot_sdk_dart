@@ -61,6 +61,9 @@ class StdioTransport implements JsonRpcTransport {
   /// The exit code of the process, or null if still running.
   int? lastExitCode;
 
+  /// Optional callback fired when the CLI process exits.
+  void Function(int exitCode)? onProcessExit;
+
   /// The PID of the spawned process, or null if not started.
   int? get pid => _process?.pid;
 
@@ -102,6 +105,7 @@ class StdioTransport implements JsonRpcTransport {
     // Capture exit code for diagnostics (fire-and-forget)
     process.exitCode.then((code) {
       lastExitCode = code;
+      onProcessExit?.call(code);
     }).ignore();
 
     _isOpen = true;
