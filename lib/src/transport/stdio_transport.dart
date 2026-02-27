@@ -58,6 +58,9 @@ class StdioTransport implements JsonRpcTransport {
   /// The stderr output from the CLI process (for diagnostics).
   final StringBuffer stderrBuffer = StringBuffer();
 
+  /// The exit code of the process, or null if still running.
+  int? lastExitCode;
+
   /// The PID of the spawned process, or null if not started.
   int? get pid => _process?.pid;
 
@@ -95,6 +98,11 @@ class StdioTransport implements JsonRpcTransport {
     process.stderr.listen((data) {
       stderrBuffer.write(String.fromCharCodes(data));
     });
+
+    // Capture exit code for diagnostics (fire-and-forget)
+    process.exitCode.then((code) {
+      lastExitCode = code;
+    }).ignore();
 
     _isOpen = true;
   }
