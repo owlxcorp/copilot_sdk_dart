@@ -89,7 +89,14 @@ class _ContentLengthDecoder {
   void _processBuffer() {
     while (true) {
       if (_expectedLength == null) {
-        if (_buffer.length > _maxHeaderBytes) {
+        // Look for header separator (\r\n\r\n)
+        final bytes = _buffer.toBytes();
+        final headerEnd = _findHeaderEnd(bytes);
+
+        // Only enforce header size limit on the actual header portion
+        // (bytes before the separator). The buffer may legitimately contain
+        // header + body data from a large stdout chunk.
+        if (headerEnd == -1 && bytes.length > _maxHeaderBytes) {
           _failAndStop(
             FormatException(
               'Content-Length header exceeds maximum of $_maxHeaderBytes bytes',
@@ -97,10 +104,6 @@ class _ContentLengthDecoder {
           );
           return;
         }
-
-        // Look for header
-        final bytes = _buffer.toBytes();
-        final headerEnd = _findHeaderEnd(bytes);
         if (headerEnd == -1) return;
 
         final headerStr = utf8.decode(bytes.sublist(0, headerEnd));

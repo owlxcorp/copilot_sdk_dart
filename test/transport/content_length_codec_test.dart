@@ -188,6 +188,51 @@ void main() {
         await expectation;
       });
 
+      test('allows large body in single chunk with small header', () async {
+        // Regression: a single chunk containing header + large body should
+        // NOT trigger the header-size guard. Only bytes before \r\n\r\n
+        // count towards the header limit.
+        final guardedCodec = ContentLengthCodec(maxHeaderBytes: 64);
+        final bigBody = {'data': 'x' * 200}; // body > 64 bytes
+        final encoded = guardedCodec.encode(bigBody);
+
+        final controller = StreamController<List<int>>();
+        final decoded =
+            controller.stream.transform(guardedCodec.decoder).toList();
+
+        // Send entire message (header ~25 bytes + body ~215 bytes) in one chunk
+        controller.add(encoded);
+        await controller.close();
+
+        final results = await decoded;
+        expect(results, hasLength(1));
+        expect(results[0], equals(bigBody));
+      });
+
+      test('allows two messages in single chunk exceeding header limit',
+          () async {
+        // When two messages arrive in one stdout chunk, the combined size
+        // can exceed maxHeaderBytes. This must not trigger a false positive.
+        final guardedCodec = ContentLengthCodec(maxHeaderBytes: 64);
+        final msg1 = {'id': '1', 'data': 'a' * 100};
+        final msg2 = {'id': '2', 'data': 'b' * 100};
+        final enc1 = guardedCodec.encode(msg1);
+        final enc2 = guardedCodec.encode(msg2);
+
+        final controller = StreamController<List<int>>();
+        final decoded =
+            controller.stream.transform(guardedCodec.decoder).toList();
+
+        // Both messages in a single chunk (total >> 64 bytes)
+        controller.add([...enc1, ...enc2]);
+        await controller.close();
+
+        final results = await decoded;
+        expect(results, hasLength(2));
+        expect(results[0], equals(msg1));
+        expect(results[1], equals(msg2));
+      });
+
       test('rejects incremental body chunks that grow buffer beyond max',
           () async {
         // Verifies the _onData guard prevents unbounded buffer growth when
