@@ -1025,6 +1025,7 @@ final class AssistantUsageEvent extends SessionEvent {
 
 // ── Abort Event ─────────────────────────────────────────────────────────────
 
+/// Indicates the agent session was aborted, with a human-readable [reason].
 final class AbortEvent extends SessionEvent {
   const AbortEvent({
     required super.id,

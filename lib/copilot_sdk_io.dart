@@ -4,6 +4,6 @@
 /// For web, use `copilot_sdk_web.dart` instead.
 library;
 
-export 'copilot_sdk.dart';
+export 'copilot_sdk_dart.dart';
 export 'src/transport/stdio_transport.dart';
 export 'src/transport/tcp_transport.dart';

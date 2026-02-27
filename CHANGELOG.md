@@ -1,3 +1,10 @@
+## 0.1.2
+
+- Renamed main library file from `copilot_sdk.dart` to `copilot_sdk_dart.dart`
+  to follow Dart package layout conventions (main library matches package name).
+- Added missing dartdoc for `TcpTransport` constructor, `host`, `port`,
+  `connectionTimeout`, and `AbortEvent`.
+
 ## 0.1.1
 
 - **Fix: ContentLengthCodec false positive header size check**

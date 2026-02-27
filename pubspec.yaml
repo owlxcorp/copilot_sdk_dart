@@ -2,15 +2,15 @@ name: copilot_sdk_dart
 description: >-
   Community-maintained Dart SDK for the GitHub Copilot CLI agent runtime.
   Unofficial and not affiliated with GitHub or Microsoft.
-version: 0.1.1
+version: 0.1.2
 homepage: https://github.com/owlxcorp/copilot_sdk_dart
 repository: https://github.com/owlxcorp/copilot_sdk_dart
 issue_tracker: https://github.com/owlxcorp/copilot_sdk_dart/issues
 topics:
   - copilot
+  - copilot-cli-sdk
   - github
   - ai
-  - json-rpc
   - agent
 
 environment:

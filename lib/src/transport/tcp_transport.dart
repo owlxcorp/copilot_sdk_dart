@@ -9,14 +9,22 @@ import 'json_rpc_transport.dart';
 /// Connects to a running CLI server at the specified host:port and
 /// communicates via Content-Length framed JSON-RPC messages.
 class TcpTransport implements JsonRpcTransport {
+  /// Creates a TCP transport that connects to [host]:[port].
+  ///
+  /// The optional [connectionTimeout] defaults to 10 seconds.
   TcpTransport({
     required this.host,
     required this.port,
     this.connectionTimeout = const Duration(seconds: 10),
   });
 
+  /// The hostname or IP address of the Copilot CLI server.
   final String host;
+
+  /// The TCP port of the Copilot CLI server.
   final int port;
+
+  /// Maximum time to wait when establishing the TCP connection.
   final Duration connectionTimeout;
   final ContentLengthCodec _codec = ContentLengthCodec();
 
