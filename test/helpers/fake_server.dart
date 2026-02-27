@@ -169,7 +169,10 @@ class FakeServer {
 
     connection.registerRequestHandler(
       'session.plan.read',
-      (params) async => {'plan': '# My Plan\n- Step 1\n- Step 2'},
+      (params) async => {
+        'exists': true,
+        'content': '# My Plan\n- Step 1\n- Step 2',
+      },
     );
 
     connection.registerRequestHandler(
@@ -270,7 +273,7 @@ class FakeServer {
 
     connection.registerRequestHandler(
       'session.setForeground',
-      (params) async => <String, dynamic>{},
+      (params) async => {'success': true},
     );
   }
 

@@ -185,3 +185,37 @@ ToolResult normalizeToolResult(dynamic result) {
   if (result is String) return ToolResultSuccess(result);
   return ToolResultSuccess(result.toString());
 }
+
+/// Convenience factory matching the upstream SDK `defineTool` helper.
+///
+/// Creates a [Tool] with the given [name], optional [description],
+/// optional [parameters] (JSON Schema), and [handler].
+///
+/// ```dart
+/// final weatherTool = defineTool(
+///   'get_weather',
+///   description: 'Get weather for a city',
+///   parameters: {
+///     'type': 'object',
+///     'properties': {
+///       'city': {'type': 'string'},
+///     },
+///   },
+///   handler: (args, inv) async {
+///     return ToolResultSuccess('Sunny in ${args['city']}');
+///   },
+/// );
+/// ```
+Tool defineTool(
+  String name, {
+  String? description,
+  Map<String, dynamic>? parameters,
+  required ToolHandler handler,
+}) {
+  return Tool(
+    name: name,
+    description: description,
+    parameters: parameters,
+    handler: handler,
+  );
+}

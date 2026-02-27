@@ -56,6 +56,7 @@ class CopilotClient {
   JsonRpcConnection? _connection;
   ConnectionState _connectionState = ConnectionState.disconnected;
   final Map<String, CopilotSession> _sessions = {};
+  bool _forceStopping = false;
 
   // Callbacks
   void Function(ConnectionState state)? onConnectionStateChanged;
@@ -65,6 +66,10 @@ class CopilotClient {
   final List<void Function(SessionLifecycleEvent)> _lifecycleHandlers = [];
   final Map<SessionLifecycleEventType,
       List<void Function(SessionLifecycleEvent)>> _typedLifecycleHandlers = {};
+
+  // Models cache with lock to prevent concurrent fetches
+  List<ModelInfo>? _modelsCache;
+  Completer<void>? _modelsCacheLock;
 
   /// Current connection state.
   ConnectionState get connectionState => _connectionState;
@@ -105,24 +110,71 @@ class CopilotClient {
   }
 
   /// Stops the client and closes all sessions.
-  Future<void> stop() async {
-    // Destroy all sessions
+  ///
+  /// Sessions are destroyed with up to 3 retries and exponential backoff.
+  /// Returns a list of errors encountered during cleanup.
+  Future<List<Exception>> stop() async {
+    _forceStopping = true;
+    final errors = <Exception>[];
+
+    // Destroy all sessions with retry logic (direct RPC, bypassing
+    // session.destroy()'s idempotency guard to allow real retries).
     final sessionsToDestroy = List<CopilotSession>.from(_sessions.values);
     for (final session in sessionsToDestroy) {
-      try {
-        await session.destroy();
-      } catch (_) {
-        // Best effort cleanup
+      Exception? lastError;
+
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await _connection?.sendRequest(
+            'session.destroy',
+            {'sessionId': session.sessionId},
+            const Duration(seconds: 10),
+          );
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e is Exception ? e : Exception(e.toString());
+          if (attempt < 3) {
+            // Exponential backoff: 100ms, 200ms
+            await Future<void>.delayed(
+              Duration(milliseconds: 100 * (1 << (attempt - 1))),
+            );
+          }
+        }
+      }
+
+      // Always clean up the session locally
+      session.handleConnectionClose();
+
+      if (lastError != null) {
+        errors.add(Exception(
+          'Failed to destroy session ${session.sessionId} after 3 attempts: '
+          '$lastError',
+        ));
       }
     }
     _sessions.clear();
+    _modelsCache = null;
 
     // Close connection and transport
-    await _connection?.close();
+    try {
+      await _connection?.close();
+    } catch (e) {
+      errors.add(
+          e is Exception ? e : Exception('Failed to close connection: $e'));
+    }
     _connection = null;
-    await _transport?.close();
+
+    try {
+      await _transport?.close();
+    } catch (e) {
+      errors
+          .add(e is Exception ? e : Exception('Failed to close transport: $e'));
+    }
 
     _setConnectionState(ConnectionState.disconnected);
+    _forceStopping = false;
+    return errors;
   }
 
   /// Force-stops the client immediately without graceful session cleanup.
@@ -130,7 +182,9 @@ class CopilotClient {
   /// Unlike [stop], this does not attempt to destroy sessions via RPC.
   /// It clears sessions, kills the connection, and closes the transport.
   Future<void> forceStop() async {
+    _forceStopping = true;
     _sessions.clear();
+    _modelsCache = null;
 
     await _connection?.close();
     _connection = null;
@@ -147,19 +201,62 @@ class CopilotClient {
   }) async {
     await _autoStartIfNeeded();
 
+    // Build payload with merged tools and sdkProtocolVersion
+    final payload = config.toJson();
+    if (options.tools.isNotEmpty) {
+      final seen = <String>{};
+      final merged = <Map<String, dynamic>>[];
+      // Client tools first (matching upstream dedup order)
+      for (final t in options.tools) {
+        if (seen.add(t.name)) merged.add(t.toRegistrationJson());
+      }
+      for (final t in config.tools) {
+        if (seen.add(t.name)) merged.add(t.toRegistrationJson());
+      }
+      payload['tools'] = merged;
+    }
+
     final result = await _connection!.sendRequest(
       'session.create',
-      config.toJson(),
+      payload,
       const Duration(seconds: 30),
     );
 
     final resultMap = result as Map<String, dynamic>;
     final sessionId = resultMap['sessionId'] as String;
     final workspacePath = resultMap['workspacePath'] as String?;
+
+    // Resolve effective handlers (session config > client options)
+    final effectiveConfig = SessionConfig(
+      sessionId: config.sessionId,
+      clientName: config.clientName,
+      model: config.model,
+      systemMessage: config.systemMessage,
+      infiniteSessions: config.infiniteSessions,
+      streaming: config.streaming,
+      tools: config.tools,
+      availableTools: config.availableTools,
+      excludedTools: config.excludedTools,
+      mcpServers: config.mcpServers,
+      customAgents: config.customAgents,
+      skillDirectories: config.skillDirectories,
+      disabledSkills: config.disabledSkills,
+      hooks: config.hooks ?? options.hooks,
+      provider: config.provider,
+      reasoningEffort: config.reasoningEffort,
+      mode: config.mode,
+      attachments: config.attachments,
+      configDir: config.configDir,
+      workingDirectory: config.workingDirectory,
+      onPermissionRequest: config.onPermissionRequest,
+      onUserInputRequest:
+          config.onUserInputRequest ?? options.onUserInputRequest,
+    );
+
     final session = CopilotSession(
       sessionId: sessionId,
       connection: _connection!,
-      config: config,
+      config: effectiveConfig,
       workspacePath: workspacePath,
     );
 
@@ -175,9 +272,23 @@ class CopilotClient {
   }) async {
     await _autoStartIfNeeded();
 
+    // Build payload with merged tools and sdkProtocolVersion
+    final payload = config.toJson();
+    if (options.tools.isNotEmpty) {
+      final seen = <String>{};
+      final merged = <Map<String, dynamic>>[];
+      for (final t in options.tools) {
+        if (seen.add(t.name)) merged.add(t.toRegistrationJson());
+      }
+      for (final t in config.tools) {
+        if (seen.add(t.name)) merged.add(t.toRegistrationJson());
+      }
+      payload['tools'] = merged;
+    }
+
     final result = await _connection!.sendRequest(
       'session.resume',
-      config.toJson(),
+      payload,
       const Duration(seconds: 30),
     );
 
@@ -189,7 +300,7 @@ class CopilotClient {
       connection: _connection!,
       config: SessionConfig(
         tools: config.tools,
-        hooks: config.hooks,
+        hooks: config.hooks ?? options.hooks,
         model: config.model,
         systemMessage: config.systemMessage,
         provider: config.provider,
@@ -197,7 +308,8 @@ class CopilotClient {
         mcpServers: config.mcpServers,
         customAgents: config.customAgents,
         onPermissionRequest: config.onPermissionRequest,
-        onUserInputRequest: config.onUserInputRequest,
+        onUserInputRequest:
+            config.onUserInputRequest ?? options.onUserInputRequest,
       ),
       workspacePath: workspacePath,
     );
@@ -216,7 +328,7 @@ class CopilotClient {
 
     final result = await _connection!.sendRequest(
       'session.list',
-      filter?.toJson() ?? {},
+      <String, dynamic>{if (filter != null) 'filter': filter.toJson()},
       const Duration(seconds: 10),
     );
 
@@ -231,11 +343,19 @@ class CopilotClient {
   Future<void> deleteSession(String sessionId) async {
     _ensureConnected();
 
-    await _connection!.sendRequest(
+    final result = await _connection!.sendRequest(
       'session.delete',
       {'sessionId': sessionId},
       const Duration(seconds: 10),
-    );
+    ) as Map<String, dynamic>;
+
+    final success = result['success'] as bool?;
+    if (success == false) {
+      final error = result['error'] as String? ?? 'Unknown error';
+      throw StateError(
+        'Failed to delete session $sessionId: $error',
+      );
+    }
 
     _sessions.remove(sessionId);
   }
@@ -243,11 +363,11 @@ class CopilotClient {
   // ── Server RPC Methods ─────────────────────────────────────────────────
 
   /// Pings the CLI server. Returns pong response.
-  Future<Map<String, dynamic>> ping() async {
+  Future<Map<String, dynamic>> ping({String? message}) async {
     _ensureConnected();
     final result = await _connection!.sendRequest(
       'ping',
-      <String, dynamic>{},
+      <String, dynamic>{if (message != null) 'message': message},
       const Duration(seconds: 5),
     );
     return result as Map<String, dynamic>;
@@ -276,26 +396,66 @@ class CopilotClient {
   }
 
   /// Lists available models.
-  Future<List<ModelInfo>> listModels() async {
+  ///
+  /// Results are cached after the first call. The cache is cleared on [stop]
+  /// or [forceStop]. Concurrent calls share the same fetch (lock-based).
+  /// Set [forceRefresh] to `true` to bypass the cache.
+  Future<List<ModelInfo>> listModels({bool forceRefresh = false}) async {
     _ensureConnected();
-    final result = await _connection!.sendRequest(
-      'models.list',
-      <String, dynamic>{},
-      const Duration(seconds: 10),
-    );
-    final map = result as Map<String, dynamic>;
-    final models = map['models'] as List<dynamic>;
-    return models
-        .map((m) => ModelInfo.fromJson(m as Map<String, dynamic>))
-        .toList();
+
+    if (forceRefresh) {
+      _modelsCache = null;
+    }
+
+    // Wait for any in-flight fetch to complete
+    while (_modelsCacheLock != null) {
+      await _modelsCacheLock!.future;
+    }
+
+    // Return cached copy if available
+    if (_modelsCache != null) {
+      return List.of(_modelsCache!);
+    }
+
+    // Acquire lock and fetch
+    final lock = Completer<void>();
+    _modelsCacheLock = lock;
+
+    try {
+      final result = await _connection!.sendRequest(
+        'models.list',
+        <String, dynamic>{},
+        const Duration(seconds: 10),
+      );
+      final map = result as Map<String, dynamic>;
+      final models = (map['models'] as List<dynamic>)
+          .map((m) => ModelInfo.fromJson(m as Map<String, dynamic>))
+          .toList();
+      _modelsCache = models;
+      return List.of(models);
+    } finally {
+      _modelsCacheLock = null;
+      lock.complete();
+    }
+  }
+
+  /// Force-refreshes the models cache and returns the updated list.
+  Future<List<ModelInfo>> refreshModelsCache() async {
+    _modelsCache = null;
+    return listModels();
   }
 
   /// Lists available built-in tools.
-  Future<List<ToolInfo>> listTools() async {
+  ///
+  /// When [model] is provided, the returned list reflects model-specific
+  /// tool overrides.
+  Future<List<ToolInfo>> listTools({String? model}) async {
     _ensureConnected();
     final result = await _connection!.sendRequest(
       'tools.list',
-      <String, dynamic>{},
+      <String, dynamic>{
+        if (model != null) 'model': model,
+      },
       const Duration(seconds: 10),
     );
     final map = result as Map<String, dynamic>;
@@ -339,13 +499,21 @@ class CopilotClient {
   }
 
   /// Sets the foreground session.
+  ///
+  /// Throws if the server reports failure.
   Future<void> setForegroundSessionId(String sessionId) async {
     _ensureConnected();
-    await _connection!.sendRequest(
+    final result = await _connection!.sendRequest(
       'session.setForeground',
       {'sessionId': sessionId},
       const Duration(seconds: 5),
     );
+    final map = result as Map<String, dynamic>;
+    if (map['success'] != true) {
+      final error =
+          map['error'] as String? ?? 'Failed to set foreground session';
+      throw Exception(error);
+    }
   }
 
   // ── Lifecycle Event Subscription ─────────────────────────────────────
@@ -480,10 +648,18 @@ class CopilotClient {
       const Duration(seconds: 5),
     ) as Map<String, dynamic>;
     final serverVersion = pong['protocolVersion'] as int?;
-    if (serverVersion != null && serverVersion != sdkProtocolVersion) {
+    if (serverVersion == null) {
       throw StateError(
         'Protocol version mismatch: SDK expects $sdkProtocolVersion, '
-        'server reported $serverVersion',
+        'but server does not report a protocol version. '
+        'Please update your server to ensure compatibility.',
+      );
+    }
+    if (serverVersion != sdkProtocolVersion) {
+      throw StateError(
+        'Protocol version mismatch: SDK expects $sdkProtocolVersion, '
+        'server reported $serverVersion. '
+        'Please update your SDK or server to ensure compatibility.',
       );
     }
   }
@@ -568,8 +744,12 @@ class CopilotClient {
       arguments: arguments,
     );
 
-    final result =
-        await session.handleToolCall(toolName, arguments, invocation);
+    final result = await session.handleToolCall(
+      toolName,
+      arguments,
+      invocation,
+      fallbackTools: options.tools,
+    );
     options.log?.call(
         'SDK: tool.call DONE → $toolName result=${result is ToolResultSuccess ? 'success' : 'failure'}');
     // CLI expects {"result": {toolResult}} envelope (matches Go SDK toolCallResponse)
@@ -599,10 +779,19 @@ class CopilotClient {
     final request = PermissionRequest.fromJson(params);
     final invocation = PermissionInvocation(sessionId: sessionId);
 
-    final result =
-        await session.effectivePermissionHandler(request, invocation);
-    // CLI expects {"result": {permissionResult}} envelope (matches Go SDK permissionRequestResponse)
-    return {'result': result.toJson()};
+    try {
+      final result =
+          await session.effectivePermissionHandler(request, invocation);
+      // CLI expects {"result": {permissionResult}} envelope
+      return {'result': result.toJson()};
+    } catch (_) {
+      // If permission handler fails, deny the permission (matches upstream)
+      return {
+        'result': {
+          'kind': 'denied-no-approval-rule-and-could-not-request-from-user',
+        },
+      };
+    }
   }
 
   Future<Map<String, dynamic>> _handleUserInputRequest(
@@ -669,10 +858,18 @@ class CopilotClient {
       return <String, dynamic>{};
     }
 
-    final result = await hooks.invoke(hookType, input, sessionId);
-    if (result == null) return <String, dynamic>{};
-    if (result is Map<String, dynamic>) return result;
-    return (result as dynamic).toJson() as Map<String, dynamic>;
+    try {
+      final result = await hooks.invoke(hookType, input, sessionId);
+      if (result == null) return <String, dynamic>{};
+      // CLI expects {output: hookResult} envelope (matches upstream)
+      final output = result is Map<String, dynamic>
+          ? result
+          : (result as dynamic).toJson() as Map<String, dynamic>;
+      return {'output': output};
+    } catch (_) {
+      // Hook failed — return empty (matches upstream behavior)
+      return <String, dynamic>{};
+    }
   }
 
   void _handleLifecycleEvent(dynamic params) {
@@ -698,12 +895,30 @@ class CopilotClient {
   }
 
   void _handleConnectionClose() {
+    final shouldRestart =
+        options.autoRestart && !_forceStopping && _transport is StdioTransport;
     _setConnectionState(ConnectionState.disconnected);
     // Notify all sessions
     for (final session in _sessions.values) {
       session.handleConnectionClose();
     }
     _sessions.clear();
+
+    // Auto-restart only for stdio transport (we own the process)
+    if (shouldRestart) {
+      _reconnect();
+    }
+  }
+
+  /// Attempt to reconnect to the server.
+  Future<void> _reconnect() async {
+    try {
+      await stop();
+      _forceStopping = false;
+      await start();
+    } catch (_) {
+      // Reconnection failed — remain disconnected
+    }
   }
 
   void _setConnectionState(ConnectionState state) {

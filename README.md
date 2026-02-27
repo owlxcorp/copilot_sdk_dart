@@ -165,14 +165,14 @@ final session = await client.createSession(
 
 ## Event Types
 
-All 25+ event types are modeled as Dart 3 sealed classes for exhaustive pattern matching:
+All 46 event types are modeled as Dart 3 sealed classes for exhaustive pattern matching:
 
 | Category | Events |
 |----------|--------|
-| Session lifecycle | `SessionStartEvent`, `SessionResumeEvent`, `SessionIdleEvent`, `SessionShutdownEvent`, `SessionErrorEvent` |
-| Session state | `SessionTitleChangedEvent`, `SessionModelChangeEvent`, `SessionModeChangedEvent`, `SessionPlanChangedEvent`, `SessionTruncationEvent` |
-| Messages | `AssistantMessageEvent`, `AssistantThinkingEvent`, `UserMessageEvent`, `SystemMessageEvent` |
-| Tools | `ToolCallEvent`, `ToolExecutionStartEvent`, `ToolExecutionPartialResultEvent`, `ToolExecutionCompleteEvent` |
+| Session lifecycle | `SessionStartEvent`, `SessionResumeEvent`, `SessionIdleEvent`, `SessionShutdownEvent`, `SessionErrorEvent`, `SessionInfoEvent`, `SessionWarningEvent`, `SessionTaskCompleteEvent` |
+| Session state | `SessionTitleChangedEvent`, `SessionModelChangeEvent`, `SessionModeChangedEvent`, `SessionPlanChangedEvent`, `SessionTruncationEvent`, `SessionContextChangedEvent`, `SessionUsageInfoEvent`, `SessionSnapshotRewindEvent`, `SessionHandoffEvent`, `SessionWorkspaceFileChangedEvent`, `SessionCompactionStartEvent`, `SessionCompactionCompleteEvent` |
+| Messages | `AssistantMessageEvent`, `AssistantMessageDeltaEvent`, `AssistantStreamingDeltaEvent`, `AssistantReasoningEvent`, `AssistantReasoningDeltaEvent`, `AssistantIntentEvent`, `AssistantUsageEvent`, `AssistantTurnStartEvent`, `AssistantTurnEndEvent`, `UserMessageEvent`, `PendingMessagesModifiedEvent`, `SystemMessageEvent`, `AbortEvent` |
+| Tools | `ToolUserRequestedEvent`, `ToolExecutionStartEvent`, `ToolExecutionPartialResultEvent`, `ToolExecutionProgressEvent`, `ToolExecutionCompleteEvent` |
 | Skills & agents | `SkillInvokedEvent`, `SubagentStartedEvent`, `SubagentCompletedEvent`, `SubagentFailedEvent`, `SubagentSelectedEvent` |
 | Hooks | `HookStartEvent`, `HookEndEvent` |
 | Fallback | `UnknownEvent` (for forward compatibility) |

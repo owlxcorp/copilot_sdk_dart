@@ -100,6 +100,21 @@ void main() {
       expect(states, contains(ConnectionState.error));
     });
 
+    test('start() fails when server omits protocolVersion', () async {
+      server.overrideHandler('ping', (params) async {
+        return <String, dynamic>{};
+      });
+
+      expect(
+        () => client.start(),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('does not report a protocol version'),
+        )),
+      );
+    });
+
     test('clears sessions on stop', () async {
       await client.start();
       await client.createSession(
@@ -588,8 +603,9 @@ void main() {
         input: {'toolName': 'bash', 'toolCallId': 'tc-1'},
       );
 
-      expect(result['permissionDecision'], 'allow');
-      expect(result['permissionDecisionReason'], 'Approved: bash');
+      final output = result['output'] as Map<String, dynamic>;
+      expect(output['permissionDecision'], 'allow');
+      expect(output['permissionDecisionReason'], 'Approved: bash');
     });
 
     test('hook invoke returns empty map when no hooks configured', () async {
@@ -960,7 +976,8 @@ void main() {
 
       expect(dynamicHookCalled, isTrue);
       expect(configHookCalled, isFalse);
-      expect(result['permissionDecision'], 'allow');
+      final output = result['output'] as Map<String, dynamic>;
+      expect(output['permissionDecision'], 'allow');
     });
   });
 
@@ -1010,6 +1027,339 @@ void main() {
 
       expect(client.isConnected, isTrue);
       expect(resumed.sessionId, sessionId);
+    });
+  });
+
+  // ── Feature Parity Tests ───────────────────────────────────────────────
+
+  group('Feature Parity', () {
+    late FakeServer server;
+    late CopilotClient client;
+
+    setUp(() async {
+      server = FakeServer();
+      client = CopilotClient(
+        options: const CopilotClientOptions(autoStart: true),
+        transport: server.clientTransport,
+      );
+    });
+
+    tearDown(() async {
+      await client.forceStop();
+    });
+
+    test('ping accepts optional message parameter', () async {
+      await client.start();
+      final pong = await client.ping(message: 'health check');
+      expect(pong, isA<Map<String, dynamic>>());
+    });
+
+    test('ping works without message parameter', () async {
+      await client.start();
+      final pong = await client.ping();
+      expect(pong, isA<Map<String, dynamic>>());
+    });
+
+    test('stop returns empty error list on success', () async {
+      await client.start();
+      await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+
+      final errors = await client.stop();
+      expect(errors, isEmpty);
+      expect(client.connectionState, ConnectionState.disconnected);
+    });
+
+    test('stop retries session destroy on failure', () async {
+      await client.start();
+      await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+
+      // Override session.destroy to fail
+      var attempts = 0;
+      server.connection.removeRequestHandler('session.destroy');
+      server.connection.registerRequestHandler(
+        'session.destroy',
+        (params) async {
+          attempts++;
+          if (attempts < 3) throw Exception('destroy failed');
+          return <String, dynamic>{};
+        },
+      );
+
+      final errors = await client.stop();
+      expect(errors, isEmpty); // 3rd attempt succeeds
+      expect(attempts, 3);
+    });
+
+    test('stop collects errors after 3 failed retries', () async {
+      await client.start();
+      await client.createSession(
+        config: SessionConfig(onPermissionRequest: approveAllPermissions),
+      );
+
+      server.connection.removeRequestHandler('session.destroy');
+      server.connection.registerRequestHandler(
+        'session.destroy',
+        (params) async => throw Exception('always fails'),
+      );
+
+      final errors = await client.stop();
+      expect(errors, hasLength(1));
+      expect(errors.first.toString(), contains('after 3 attempts'));
+    });
+
+    test('deleteSession throws on server failure response', () async {
+      await client.start();
+      server.connection.removeRequestHandler('session.delete');
+      server.connection.registerRequestHandler(
+        'session.delete',
+        (params) async => {'success': false, 'error': 'Session not found'},
+      );
+
+      expect(
+        () => client.deleteSession('nonexistent'),
+        throwsA(isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('Session not found'),
+        )),
+      );
+    });
+
+    test('permission handler error returns denial fallback', () async {
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: (req, inv) async {
+            throw Exception('handler crashed');
+          },
+        ),
+      );
+
+      final result = await server.sendPermissionRequest(
+        sessionId: session.sessionId,
+        data: {'toolName': 'bash', 'command': 'rm -rf /'},
+      );
+
+      // Should return denial, not throw
+      final inner = result['result'] as Map<String, dynamic>;
+      expect(inner['kind'],
+          'denied-no-approval-rule-and-could-not-request-from-user');
+    });
+
+    test('hook invoke error returns empty map silently', () async {
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+          hooks: SessionHooks(
+            onPreToolUse: (input, inv) async {
+              throw Exception('hook crashed');
+            },
+          ),
+        ),
+      );
+
+      final result = await server.sendHookInvoke(
+        sessionId: session.sessionId,
+        hookType: 'preToolUse',
+        input: {'toolName': 'bash'},
+      );
+
+      // Should return empty, not throw
+      expect(result, isEmpty);
+    });
+
+    test('tool error does not leak details to LLM', () async {
+      final session = await client.createSession(
+        config: SessionConfig(
+          onPermissionRequest: approveAllPermissions,
+          tools: [
+            Tool(
+              name: 'crasher',
+              handler: (args, inv) async {
+                throw Exception('secret internal error');
+              },
+            ),
+          ],
+        ),
+      );
+
+      final response = await server.sendToolCallRequest(
+        sessionId: session.sessionId,
+        toolName: 'crasher',
+        toolCallId: 'tc-leak',
+      );
+
+      final result = response['result'] as Map<String, dynamic>;
+      // textResultForLlm should NOT contain the error details
+      expect(
+          result['textResultForLlm'],
+          'Invoking this tool produced an error. '
+          'Detailed information is not available.');
+      // But the error field should still have details for logging
+      expect(result['error'], contains('secret internal error'));
+    });
+
+    test('listSessions wraps filter in filter envelope', () async {
+      await client.start();
+      Map<String, dynamic>? capturedParams;
+
+      server.connection.removeRequestHandler('session.list');
+      server.connection.registerRequestHandler(
+        'session.list',
+        (params) async {
+          capturedParams = params as Map<String, dynamic>;
+          return {'sessions': <Map<String, dynamic>>[]};
+        },
+      );
+
+      await client.listSessions(
+        filter: const SessionListFilter(repository: 'owner/repo'),
+      );
+
+      expect(capturedParams, isNotNull);
+      expect(capturedParams!['filter'], isA<Map<String, dynamic>>());
+      expect(capturedParams!['filter']['repository'], 'owner/repo');
+    });
+
+    test('listSessions without filter sends no filter key', () async {
+      await client.start();
+      Map<String, dynamic>? capturedParams;
+
+      server.connection.removeRequestHandler('session.list');
+      server.connection.registerRequestHandler(
+        'session.list',
+        (params) async {
+          capturedParams = params as Map<String, dynamic>;
+          return {'sessions': <Map<String, dynamic>>[]};
+        },
+      );
+
+      await client.listSessions();
+
+      expect(capturedParams, isNotNull);
+      expect(capturedParams!.containsKey('filter'), isFalse);
+    });
+
+    test('listModels caches results', () async {
+      await client.start();
+      var callCount = 0;
+      server.connection.registerRequestHandler(
+        'models.list',
+        (params) async {
+          callCount++;
+          return {
+            'models': [
+              {
+                'id': 'gpt-4',
+                'name': 'GPT-4',
+                'version': '1.0',
+                'displayName': 'GPT-4',
+                'vendor': 'openai',
+                'family': 'gpt-4',
+                'capabilities': {
+                  'supports': {'vision': false, 'reasoningEffort': false},
+                  'limits': {'max_context_window_tokens': 8192},
+                },
+              }
+            ]
+          };
+        },
+      );
+
+      final first = await client.listModels();
+      final second = await client.listModels();
+
+      expect(first.length, 1);
+      expect(second.length, 1);
+      expect(callCount, 1); // Only one RPC call despite two listModels calls
+    });
+
+    test('listModels cache is cleared on forceStop', () async {
+      await client.start();
+      var callCount = 0;
+      server.connection.registerRequestHandler(
+        'models.list',
+        (params) async {
+          callCount++;
+          return {
+            'models': [
+              {
+                'id': 'gpt-4',
+                'name': 'GPT-4',
+                'version': '1.0',
+                'displayName': 'GPT-4',
+                'vendor': 'openai',
+                'family': 'gpt-4',
+                'capabilities': {
+                  'supports': {'vision': false, 'reasoningEffort': false},
+                  'limits': {'max_context_window_tokens': 8192},
+                },
+              }
+            ]
+          };
+        },
+      );
+
+      await client.listModels();
+      expect(callCount, 1);
+
+      // forceStop clears the cache
+      await client.forceStop();
+      expect(callCount, 1);
+    });
+
+    test('listTools accepts optional model parameter', () async {
+      await client.start();
+      Map<String, dynamic>? capturedParams;
+      server.connection.registerRequestHandler(
+        'tools.list',
+        (params) async {
+          capturedParams = params as Map<String, dynamic>;
+          return {'tools': <Map<String, dynamic>>[]};
+        },
+      );
+
+      await client.listTools(model: 'gpt-4');
+
+      expect(capturedParams, isNotNull);
+      expect(capturedParams!['model'], 'gpt-4');
+    });
+
+    test('listTools without model sends no model key', () async {
+      await client.start();
+      Map<String, dynamic>? capturedParams;
+      server.connection.registerRequestHandler(
+        'tools.list',
+        (params) async {
+          capturedParams = params as Map<String, dynamic>;
+          return {'tools': <Map<String, dynamic>>[]};
+        },
+      );
+
+      await client.listTools();
+
+      expect(capturedParams, isNotNull);
+      expect(capturedParams!.containsKey('model'), isFalse);
+    });
+
+    test('setForegroundSessionId throws on failure response', () async {
+      await client.start();
+      server.connection.registerRequestHandler(
+        'session.setForeground',
+        (params) async => {'success': false, 'error': 'Session not found'},
+      );
+
+      expect(
+        () => client.setForegroundSessionId('nonexistent'),
+        throwsA(isA<Exception>().having(
+          (e) => e.toString(),
+          'message',
+          contains('Session not found'),
+        )),
+      );
     });
   });
 }

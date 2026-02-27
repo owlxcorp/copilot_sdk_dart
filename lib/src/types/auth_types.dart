@@ -94,13 +94,19 @@ class ModelCapabilities {
     required this.supportsVision,
     required this.supportsReasoningEffort,
     this.maxPromptTokens,
+    this.maxOutputTokens,
     required this.maxContextWindowTokens,
+    this.vision,
   });
 
   final bool supportsVision;
   final bool supportsReasoningEffort;
   final int? maxPromptTokens;
+  final int? maxOutputTokens;
   final int maxContextWindowTokens;
+
+  /// Vision-specific limits (only present when the model supports vision).
+  final VisionLimits? vision;
 
   factory ModelCapabilities.fromJson(Map<String, dynamic> json) {
     final supports = json['supports'] as Map<String, dynamic>;
@@ -109,7 +115,33 @@ class ModelCapabilities {
       supportsVision: supports['vision'] as bool,
       supportsReasoningEffort: supports['reasoningEffort'] as bool,
       maxPromptTokens: limits['max_prompt_tokens'] as int?,
+      maxOutputTokens: limits['max_output_tokens'] as int?,
       maxContextWindowTokens: limits['max_context_window_tokens'] as int,
+      vision: limits['vision'] != null
+          ? VisionLimits.fromJson(limits['vision'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+}
+
+/// Vision-specific model limits.
+class VisionLimits {
+  const VisionLimits({
+    required this.supportedMediaTypes,
+    required this.maxPromptImages,
+    required this.maxPromptImageSize,
+  });
+
+  final List<String> supportedMediaTypes;
+  final int maxPromptImages;
+  final int maxPromptImageSize;
+
+  factory VisionLimits.fromJson(Map<String, dynamic> json) {
+    return VisionLimits(
+      supportedMediaTypes:
+          (json['supported_media_types'] as List<dynamic>).cast<String>(),
+      maxPromptImages: json['max_prompt_images'] as int,
+      maxPromptImageSize: json['max_prompt_image_size'] as int,
     );
   }
 }
@@ -404,4 +436,15 @@ class SessionLifecycleEvent {
       metadata: json['metadata'] as Map<String, dynamic>?,
     );
   }
+}
+
+/// Result of reading a session plan.
+class PlanReadResult {
+  const PlanReadResult({required this.exists, this.content});
+
+  /// Whether plan.md exists in the workspace.
+  final bool exists;
+
+  /// The content of plan.md, or null if it does not exist.
+  final String? content;
 }

@@ -308,11 +308,13 @@ class InfiniteSessionConfig {
   /// Whether infinite sessions are enabled.
   final bool? enabled;
 
-  /// Token threshold for background compaction.
-  final int? backgroundCompactionThreshold;
+  /// Context utilization threshold (0.0–1.0) at which background compaction
+  /// starts. Default: 0.80.
+  final double? backgroundCompactionThreshold;
 
-  /// Token threshold for buffer exhaustion.
-  final int? bufferExhaustionThreshold;
+  /// Context utilization threshold (0.0–1.0) at which the session blocks until
+  /// compaction completes. Default: 0.95.
+  final double? bufferExhaustionThreshold;
 
   Map<String, dynamic> toJson() => {
         if (enabled != null) 'enabled': enabled,
@@ -724,3 +726,8 @@ Future<PermissionResult> approveAllPermissions(
 ) async {
   return PermissionResult.approved;
 }
+
+/// Alias matching the upstream SDK name `approveAll`.
+///
+/// Convenience [PermissionHandler] that approves every permission request.
+const approveAll = approveAllPermissions;

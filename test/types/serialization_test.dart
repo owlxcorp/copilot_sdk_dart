@@ -164,4 +164,81 @@ void main() {
       expect(result, PermissionResult.approved);
     });
   });
+
+  group('ModelCapabilities', () {
+    test('parses without vision limits', () {
+      final caps = ModelCapabilities.fromJson({
+        'supports': {'vision': false, 'reasoningEffort': true},
+        'limits': {
+          'max_prompt_tokens': 8192,
+          'max_context_window_tokens': 128000,
+        },
+      });
+
+      expect(caps.supportsVision, isFalse);
+      expect(caps.supportsReasoningEffort, isTrue);
+      expect(caps.maxPromptTokens, 8192);
+      expect(caps.maxContextWindowTokens, 128000);
+      expect(caps.vision, isNull);
+    });
+
+    test('parses with vision limits', () {
+      final caps = ModelCapabilities.fromJson({
+        'supports': {'vision': true, 'reasoningEffort': false},
+        'limits': {
+          'max_prompt_tokens': 4096,
+          'max_context_window_tokens': 64000,
+          'vision': {
+            'supported_media_types': ['image/png', 'image/jpeg'],
+            'max_prompt_images': 10,
+            'max_prompt_image_size': 5242880,
+          },
+        },
+      });
+
+      expect(caps.supportsVision, isTrue);
+      expect(caps.vision, isNotNull);
+      expect(caps.vision!.supportedMediaTypes, ['image/png', 'image/jpeg']);
+      expect(caps.vision!.maxPromptImages, 10);
+      expect(caps.vision!.maxPromptImageSize, 5242880);
+    });
+
+    test('parses max_output_tokens when present', () {
+      final caps = ModelCapabilities.fromJson({
+        'supports': {'vision': false, 'reasoningEffort': false},
+        'limits': {
+          'max_prompt_tokens': 8192,
+          'max_output_tokens': 4096,
+          'max_context_window_tokens': 128000,
+        },
+      });
+
+      expect(caps.maxOutputTokens, 4096);
+    });
+
+    test('max_output_tokens is null when absent', () {
+      final caps = ModelCapabilities.fromJson({
+        'supports': {'vision': false, 'reasoningEffort': false},
+        'limits': {
+          'max_context_window_tokens': 128000,
+        },
+      });
+
+      expect(caps.maxOutputTokens, isNull);
+    });
+  });
+
+  group('PlanReadResult', () {
+    test('represents existing plan', () {
+      const result = PlanReadResult(exists: true, content: '# My Plan');
+      expect(result.exists, isTrue);
+      expect(result.content, '# My Plan');
+    });
+
+    test('represents non-existent plan', () {
+      const result = PlanReadResult(exists: false);
+      expect(result.exists, isFalse);
+      expect(result.content, isNull);
+    });
+  });
 }

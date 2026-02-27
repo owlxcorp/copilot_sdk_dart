@@ -163,15 +163,26 @@ class CopilotSession {
     _tools.remove(name);
   }
 
+  /// Retrieves a registered tool handler by name.
+  ///
+  /// Returns the [ToolHandler] if a tool with [name] is registered,
+  /// or `null` if not found.
+  ToolHandler? getToolHandler(String name) => _tools[name]?.handler;
+
   /// Internal: handle a tool call from the CLI.
   Future<ToolResult> handleToolCall(
     String toolName,
     dynamic arguments,
-    ToolInvocation invocation,
-  ) async {
-    // Check session-local tools first, then config tools
+    ToolInvocation invocation, {
+    List<Tool> fallbackTools = const [],
+  }) async {
+    // Check session-local tools first, then config tools, then client-level
     final tool = _tools[toolName] ??
         config.tools.cast<Tool?>().firstWhere(
+              (t) => t!.name == toolName,
+              orElse: () => null,
+            ) ??
+        fallbackTools.cast<Tool?>().firstWhere(
               (t) => t!.name == toolName,
               orElse: () => null,
             );
@@ -186,10 +197,8 @@ class CopilotSession {
     try {
       return await tool.handler(arguments, invocation);
     } catch (e) {
-      return ToolResult.failure(
-        error: e.toString(),
-        textForLlm: 'Tool "$toolName" threw an error: $e',
-      );
+      // Don't expose detailed error information to the LLM for security
+      return ToolResult.failure(error: e.toString());
     }
   }
 
@@ -269,40 +278,39 @@ class CopilotSession {
 
   /// Sends a message and waits for the assistant's complete reply.
   ///
-  /// Returns the concatenated assistant message content, or null on timeout.
-  Future<AssistantReply?> sendAndWait(
+  /// Returns the last [AssistantMessageEvent] received before session idle,
+  /// matching the upstream Node.js/Go SDK behavior. The full event includes
+  /// `content`, `messageId`, `toolRequests`, `reasoningOpaque`,
+  /// `reasoningText`, `encryptedContent`, `phase`, and `parentToolCallId`.
+  ///
+  /// Returns `null` if no assistant message was received before idle.
+  /// Throws [TimeoutException] if no reply within [timeout] (default 60s).
+  /// Throws [StateError] on session errors.
+  Future<AssistantMessageEvent?> sendAndWait(
     String prompt, {
     List<Attachment> attachments = const [],
     MessageDeliveryMode? mode,
-    Duration timeout = const Duration(minutes: 5),
+    Duration timeout = const Duration(seconds: 60),
   }) async {
     _ensureAlive();
 
-    final completer = Completer<AssistantReply?>();
-    final buffer = StringBuffer();
-    String? messageId;
+    final completer = Completer<AssistantMessageEvent?>();
+    AssistantMessageEvent? lastMessage;
     var sendCompleted = false;
     var idleReceived = false;
 
     void completeIfReady() {
       if (!sendCompleted || !idleReceived || completer.isCompleted) return;
-      completer.complete(
-        buffer.isEmpty
-            ? null
-            : AssistantReply(
-                content: buffer.toString(),
-                messageId: messageId,
-              ),
-      );
+      completer.complete(lastMessage);
     }
 
-    // Listen for assistant message events and session idle
+    // Listen for the last assistant.message event and session idle.
+    // Matches upstream: only captures complete AssistantMessageEvents,
+    // ignores deltas (which are ephemeral streaming chunks).
     final unsub = on((event) {
       switch (event) {
-        case AssistantMessageEvent(:final content):
-          buffer.write(content);
-        case AssistantMessageDeltaEvent(:final deltaContent):
-          buffer.write(deltaContent);
+        case AssistantMessageEvent():
+          lastMessage = event;
         case SessionIdleEvent():
           idleReceived = true;
           completeIfReady();
@@ -318,7 +326,7 @@ class CopilotSession {
     });
 
     try {
-      messageId = await send(
+      await send(
         prompt,
         attachments: attachments,
         mode: mode,
@@ -326,10 +334,14 @@ class CopilotSession {
       sendCompleted = true;
       completeIfReady();
 
-      // Wait with timeout
+      // Wait with timeout — throw on timeout to match upstream behavior
       return await completer.future.timeout(
         timeout,
-        onTimeout: () => null,
+        onTimeout: () => throw TimeoutException(
+          'Timeout after ${timeout.inMilliseconds}ms waiting for '
+          'session.idle',
+          timeout,
+        ),
       );
     } finally {
       unsub();
@@ -447,14 +459,20 @@ class CopilotSession {
   // ── Plan RPC ───────────────────────────────────────────────────────────
 
   /// Reads the current plan.
-  Future<String?> readPlan() async {
+  ///
+  /// Returns a [PlanReadResult] with [PlanReadResult.exists] indicating whether
+  /// a plan exists and [PlanReadResult.content] containing its content.
+  Future<PlanReadResult> readPlan() async {
     _ensureAlive();
     final result = await _connection.sendRequest(
       'session.plan.read',
       {'sessionId': sessionId},
       const Duration(seconds: 5),
     ) as Map<String, dynamic>;
-    return result['plan'] as String?;
+    return PlanReadResult(
+      exists: result['exists'] as bool? ?? false,
+      content: result['content'] as String?,
+    );
   }
 
   /// Updates the plan.
@@ -608,6 +626,11 @@ class CopilotSession {
 }
 
 /// Represents a complete assistant reply.
+///
+/// Deprecated: Use [AssistantMessageEvent] directly instead.
+/// [CopilotSession.sendAndWait] now returns [AssistantMessageEvent?] to match
+/// the upstream SDK behavior.
+@Deprecated('Use AssistantMessageEvent directly from sendAndWait instead')
 class AssistantReply {
   const AssistantReply({
     required this.content,

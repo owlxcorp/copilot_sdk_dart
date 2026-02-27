@@ -1047,13 +1047,13 @@ void main() {
     test('toJson with all fields', () {
       const config = InfiniteSessionConfig(
         enabled: true,
-        backgroundCompactionThreshold: 80,
-        bufferExhaustionThreshold: 95,
+        backgroundCompactionThreshold: 0.80,
+        bufferExhaustionThreshold: 0.95,
       );
       final json = config.toJson();
       expect(json['enabled'], isTrue);
-      expect(json['backgroundCompactionThreshold'], 80);
-      expect(json['bufferExhaustionThreshold'], 95);
+      expect(json['backgroundCompactionThreshold'], 0.80);
+      expect(json['bufferExhaustionThreshold'], 0.95);
     });
 
     test('toJson with minimal fields', () {

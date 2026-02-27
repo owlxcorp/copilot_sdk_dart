@@ -1,3 +1,7 @@
+import 'hooks.dart';
+import 'session_config.dart';
+import 'tool_types.dart';
+
 /// Options for creating a [CopilotClient].
 class CopilotClientOptions {
   const CopilotClientOptions({
@@ -14,6 +18,10 @@ class CopilotClientOptions {
     this.githubToken,
     this.useLoggedInUser,
     this.log,
+    this.tools = const [],
+    this.hooks,
+    this.onPermissionRequest,
+    this.onUserInputRequest,
   });
 
   /// Path to the CLI executable. If null, searches PATH for 'copilot'.
@@ -58,6 +66,23 @@ class CopilotClientOptions {
 
   /// Optional log callback for SDK diagnostic messages.
   final void Function(String message)? log;
+
+  /// Client-level tools available to all sessions.
+  ///
+  /// These are merged with session-specific tools when creating sessions.
+  /// Session-level tools take priority for handler lookup.
+  final List<Tool> tools;
+
+  /// Client-level hooks. Used as fallback when session hooks are not provided.
+  final SessionHooks? hooks;
+
+  /// Client-level permission handler. Used as fallback when session config
+  /// does not provide one.
+  final PermissionHandler? onPermissionRequest;
+
+  /// Client-level user input handler. Used as fallback when session config
+  /// does not provide one.
+  final UserInputHandler? onUserInputRequest;
 }
 
 /// Log levels for the CLI server.

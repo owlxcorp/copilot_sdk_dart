@@ -53,7 +53,7 @@ _TestSession createTestSession({
   );
   serverConn.registerRequestHandler(
     'session.plan.read',
-    (p) async => {'plan': '# Plan'},
+    (p) async => {'exists': true, 'content': '# Plan'},
   );
   serverConn.registerRequestHandler(
     'session.plan.update',
@@ -457,6 +457,18 @@ void main() {
       expect(result, isA<ToolResultFailure>());
     });
 
+    test('getToolHandler returns handler for registered tool', () {
+      final handler = (dynamic args, ToolInvocation inv) async =>
+          ToolResult.success('ok');
+      ts.session.addTool(Tool(name: 'myTool', handler: handler));
+
+      expect(ts.session.getToolHandler('myTool'), equals(handler));
+    });
+
+    test('getToolHandler returns null for unknown tool', () {
+      expect(ts.session.getToolHandler('nonexistent'), isNull);
+    });
+
     test('session-local tools override config tools', () async {
       final configTool = Tool(
         name: 'shared',
@@ -649,12 +661,15 @@ void main() {
             'messageId': 'assistant-msg-1',
             'content': 'Hello ',
           }));
+          // Second assistant.message replaces the first (upstream behavior:
+          // sendAndWait returns the last assistant.message event, not
+          // accumulated deltas).
           ts.session.handleEvent(SessionEvent.fromJson({
             'type': 'assistant.message',
             'id': 'e2',
             'timestamp': '2025-01-01T00:00:01Z',
             'messageId': 'assistant-msg-2',
-            'content': 'World!',
+            'content': 'Hello World!',
           }));
           ts.session.handleEvent(SessionEvent.fromJson({
             'type': 'session.idle',
@@ -669,22 +684,23 @@ void main() {
 
       expect(reply, isNotNull);
       expect(reply!.content, 'Hello World!');
-      expect(reply.messageId, 'msg-wait-1');
+      expect(reply.messageId, 'assistant-msg-2');
     });
 
-    test('sendAndWait returns null on timeout', () async {
+    test('sendAndWait throws TimeoutException on timeout', () async {
       // Override server to never send idle
       ts.serverConn.removeRequestHandler('session.send');
       ts.serverConn.registerRequestHandler('session.send', (p) async {
         return {'messageId': 'msg-timeout'};
       });
 
-      final reply = await ts.session.sendAndWait(
-        'Hi',
-        timeout: const Duration(milliseconds: 100),
+      expect(
+        () => ts.session.sendAndWait(
+          'Hi',
+          timeout: const Duration(milliseconds: 100),
+        ),
+        throwsA(isA<TimeoutException>()),
       );
-
-      expect(reply, isNull);
     });
 
     test('sendAndWait propagates session error', () async {
@@ -735,10 +751,13 @@ void main() {
       final reply = await ts.session.sendAndWait('Hi');
       expect(reply, isNotNull);
       expect(reply!.content, 'Fast reply');
-      expect(reply.messageId, 'msg-early-idle');
+      expect(reply.messageId, 'assistant-msg-fast');
     });
 
     test('sendAndWait collects assistant.message_delta events', () async {
+      // Upstream sendAndWait returns the last assistant.message event.
+      // Deltas are streamed for real-time display but the final
+      // assistant.message contains the complete content.
       ts.serverConn.removeRequestHandler('session.send');
       ts.serverConn.registerRequestHandler('session.send', (p) async {
         Future.delayed(const Duration(milliseconds: 10), () {
@@ -760,10 +779,18 @@ void main() {
               'deltaContent': 'World!',
             },
           }));
+          // Final assistant.message with complete content
           ts.session.handleEvent(SessionEvent.fromJson({
-            'type': 'session.idle',
+            'type': 'assistant.message',
             'id': 'e3',
             'timestamp': '2025-01-01T00:00:02Z',
+            'messageId': 'assistant-msg-1',
+            'content': 'Hello World!',
+          }));
+          ts.session.handleEvent(SessionEvent.fromJson({
+            'type': 'session.idle',
+            'id': 'e4',
+            'timestamp': '2025-01-01T00:00:03Z',
           }));
         });
         return {'messageId': 'msg-delta'};
@@ -773,7 +800,7 @@ void main() {
 
       expect(reply, isNotNull);
       expect(reply!.content, 'Hello World!');
-      expect(reply.messageId, 'msg-delta');
+      expect(reply.messageId, 'assistant-msg-1');
     });
   });
 
@@ -821,9 +848,10 @@ void main() {
     });
 
     test('readPlan returns plan content', () async {
-      final plan = await ts.session.readPlan();
+      final result = await ts.session.readPlan();
 
-      expect(plan, '# Plan');
+      expect(result.exists, isTrue);
+      expect(result.content, '# Plan');
     });
 
     test('updatePlan completes without error', () async {
@@ -1070,22 +1098,25 @@ void main() {
     });
   });
 
-  // ── AssistantReply ────────────────────────────────────────────────────
+  // ── AssistantReply (deprecated) ──────────────────────────────────────
 
-  group('AssistantReply', () {
+  group('AssistantReply (deprecated)', () {
     test('toString returns content', () {
+      // ignore: deprecated_member_use_from_same_package
       const reply = AssistantReply(content: 'Hello World');
 
       expect(reply.toString(), 'Hello World');
     });
 
     test('messageId is accessible', () {
+      // ignore: deprecated_member_use_from_same_package
       const reply = AssistantReply(content: 'test', messageId: 'msg-42');
 
       expect(reply.messageId, 'msg-42');
     });
 
     test('messageId can be null', () {
+      // ignore: deprecated_member_use_from_same_package
       const reply = AssistantReply(content: 'test');
 
       expect(reply.messageId, isNull);
