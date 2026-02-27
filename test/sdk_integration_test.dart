@@ -53,20 +53,22 @@ void main() async {
   }
 
   // Build 30 tools (same count as Flutter app)
-  final tools = List.generate(30, (i) => Tool(
-    name: 'tool_$i',
-    description: 'Test tool number $i',
-    parameters: {
-      'type': 'object',
-      'properties': {
-        'query': {'type': 'string', 'description': 'Query'},
-      },
-    },
-    handler: (args, invocation) async {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      return ToolResultSuccess('Tool $i result: ok');
-    },
-  ));
+  final tools = List.generate(
+      30,
+      (i) => Tool(
+            name: 'tool_$i',
+            description: 'Test tool number $i',
+            parameters: {
+              'type': 'object',
+              'properties': {
+                'query': {'type': 'string', 'description': 'Query'},
+              },
+            },
+            handler: (args, invocation) async {
+              await Future<void>.delayed(const Duration(milliseconds: 50));
+              return ToolResultSuccess('Tool $i result: ok');
+            },
+          ));
 
   CopilotSession session;
   try {
@@ -102,7 +104,9 @@ void main() async {
         deltaCount++;
         content += event.deltaContent;
         // Simulate some work per delta (like notifyListeners)
-        for (var i = 0; i < 5; i++) { eventCount.hashCode; }
+        for (var i = 0; i < 5; i++) {
+          eventCount.hashCode;
+        }
       } else {
         print('Event #$eventCount: ${event.type}');
       }
@@ -111,7 +115,7 @@ void main() async {
         print('... $eventCount events ($deltaCount deltas)');
       }
     },
-    onError: (error) => print('Event error: $error'),
+    onError: (Object error) => print('Event error: $error'),
     onDone: () {
       print('Event stream closed ($eventCount events, $deltaCount deltas)');
       if (!completer.isCompleted) completer.complete();
@@ -121,7 +125,8 @@ void main() async {
   // Send message
   print('\nSending: "explain quantum computing in detail"');
   try {
-    await session.send('explain quantum computing in detail with many paragraphs');
+    await session
+        .send('explain quantum computing in detail with many paragraphs');
   } catch (e) {
     print('Send failed: $e');
   }
@@ -151,7 +156,9 @@ void main() async {
     print('\n❌ DIED: $eventCount events');
   }
 
-  try { await client.stop(); } catch (_) {}
+  try {
+    await client.stop();
+  } catch (_) {}
   print('Done.');
   exit(sessionDied ? 1 : 0);
 }

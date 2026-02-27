@@ -458,8 +458,8 @@ void main() {
     });
 
     test('getToolHandler returns handler for registered tool', () {
-      final handler = (dynamic args, ToolInvocation inv) async =>
-          ToolResult.success('ok');
+      final handler =
+          (dynamic args, ToolInvocation inv) async => ToolResult.success('ok');
       ts.session.addTool(Tool(name: 'myTool', handler: handler));
 
       expect(ts.session.getToolHandler('myTool'), equals(handler));

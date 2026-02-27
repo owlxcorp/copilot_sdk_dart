@@ -1,4 +1,18 @@
-## 0.1.0+1
+## 0.1.1
+
+- **Fix: ContentLengthCodec false positive header size check**
+  - The header size guard checked total buffer length before extracting the header
+    separator. During streaming responses with large stdout chunks (header + body >
+    16KB), the guard fired falsely, throwing `FormatException` and closing the
+    session stream. Now only enforces the limit on actual header bytes (before
+    `\r\n\r\n` separator).
+- **Fix: Wire `JsonRpcConnection.onError` in CopilotClient**
+  - Decoder and transport errors were silently dropped because `connection.onError`
+    was never assigned. Now routes to `options.onError` callback.
+- **Fix: Record CLI process exit code in StdioTransport**
+  - Added `lastExitCode` field and `onProcessExit` callback for immediate
+    notification when the CLI process terminates.
+- Added decoder error logging to StdioTransport stderr buffer.
 
 - **Feature parity with upstream Node.js SDK v0.1.8**
 - **P0 wire-format bug fixes:**
@@ -32,7 +46,6 @@
 - Expanded `ResumeSessionConfig` to 22 fields matching upstream
 - Added `registerTools()` batch convenience method to `CopilotSession`
 - 45+ session event types (up from 25)
-- 398 tests (up from 344)
 
 ## 0.1.0
 
