@@ -90,7 +90,12 @@ class StdioTransport implements JsonRpcTransport {
     // Decode stdout through Content-Length codec
     _subscription = process.stdout.transform(_codec.decoder).listen(
       _messageController!.add,
-      onError: _messageController!.addError,
+      onError: (Object error) {
+        // Log decoder errors before forwarding — these are usually
+        // Content-Length framing issues that kill the connection.
+        stderrBuffer.write('[SDK] Decoder error: $error\n');
+        _messageController!.addError(error);
+      },
       onDone: () {
         _isOpen = false;
         _messageController?.close();

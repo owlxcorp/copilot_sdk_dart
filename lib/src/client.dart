@@ -95,6 +95,10 @@ class CopilotClient {
       // Create JSON-RPC connection over transport
       _connection = JsonRpcConnection(_transport!, log: options.log);
       _connection!.onClose = _handleConnectionClose;
+      _connection!.onError = (error) {
+        options.log?.call('Transport error: $error');
+        onError?.call(error);
+      };
 
       // Register server→client handlers
       _registerHandlers();
